@@ -4,7 +4,7 @@ using MegaCrit.Sts2.Core.Entities.Ascension;
 using MegaCrit.Sts2.Core.Runs;
 using MegaCrit.Sts2.Core.Saves;
 
-namespace RasmusSlayTheSpire2Mod.SeedInspector;
+namespace RasmusSlayTheSpire2Mod.SeedSearch;
 
 // Ascension checks go through RunManager.Instance.HasAscension, which is false outside a run.
 // While a preview is being simulated, answer with the previewed ascension instead.

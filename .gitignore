@@ -13,3 +13,6 @@ mod-uploader.log
 
 # Workshop upload payload is build output; mod_id.txt (the Workshop item id) IS committed
 workshop/*/content/
+
+# Rust build output of the seed engine
+seed-engine/target/

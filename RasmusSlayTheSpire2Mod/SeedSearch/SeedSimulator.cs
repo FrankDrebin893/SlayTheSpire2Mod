@@ -3,6 +3,7 @@ using System.Runtime.CompilerServices;
 using HarmonyLib;
 using MegaCrit.Sts2.Core.Entities.Ascension;
 using MegaCrit.Sts2.Core.Entities.Players;
+using MegaCrit.Sts2.Core.Entities.Relics;
 using MegaCrit.Sts2.Core.Events;
 using MegaCrit.Sts2.Core.Extensions;
 using MegaCrit.Sts2.Core.Factories;
@@ -19,19 +20,28 @@ using MegaCrit.Sts2.Core.Runs;
 using MegaCrit.Sts2.Core.Saves;
 using MegaCrit.Sts2.Core.Unlocks;
 
-namespace RasmusSlayTheSpire2Mod.SeedInspector;
+namespace RasmusSlayTheSpire2Mod.SeedSearch;
+
+[Flags]
+public enum SimParts
+{
+    None = 0,
+    Reward = 1,
+    Maps = 2,
+    All = Reward | Maps
+}
 
 // Builds a detached RunState for a seed and runs the game's own start-of-run generation on it,
 // mirroring NGame.StartNewSingleplayerRun, RunManager.InitializeNewRun and RunManager.GenerateRooms
-// without ever handing the state to RunManager.
+// without ever handing the state to RunManager. The Rust engine reimplements the same sequence;
+// this is the reference it is checked against, and the slow fallback when it is unavailable.
 public static class SeedSimulator
 {
-    private const int EventsShown = 3;
-
-    private static readonly FieldInfo RoomsField = AccessTools.Field(typeof(ActModel), "_rooms");
-    private static readonly MethodInfo OwnerSetter = AccessTools.PropertySetter(typeof(EventModel), nameof(EventModel.Owner));
+    public static readonly FieldInfo RoomsField = AccessTools.Field(typeof(ActModel), "_rooms");
+    public static readonly MethodInfo OwnerSetter = AccessTools.PropertySetter(typeof(EventModel), nameof(EventModel.Owner));
     private static readonly MethodInfo RngSetter = AccessTools.PropertySetter(typeof(EventModel), nameof(EventModel.Rng));
     private static readonly MethodInfo InitialOptions = AccessTools.Method(typeof(EventModel), "GenerateInitialOptionsWrapper");
+    private static readonly FieldInfo DequesField = AccessTools.Field(typeof(RelicGrabBag), "_deques");
 
     // Non-null only while a simulation runs. SimulationPatches reads it so that ascension checks,
     // which normally ask the RunManager singleton, see the ascension being previewed.
@@ -41,36 +51,48 @@ public static class SeedSimulator
 
     private static bool _loggedFailure;
 
-    public static SeedPreview? Simulate(string rawSeed, CharacterModel character, int ascension, string act1Key, bool includeCardReward)
-    {
-        string seed = SeedHelper.CanonicalizeSeed(rawSeed);
+    public sealed record Run(RunState State, Player Player, UnlockState Unlocks);
 
+    // Runs body while ascension checks answer for the given level.
+    public static T WithAscension<T>(int ascension, Func<T> body)
+    {
         // CardRarityOdds caches an ascension-dependent value in a static field. Make sure it is
         // initialised before the override is active, so a preview can never leak into real runs.
         RuntimeHelpers.RunClassConstructor(typeof(CardRarityOdds).TypeHandle);
 
+        AscensionManager? previous = AscensionOverride;
         AscensionOverride = new AscensionManager(ascension);
         try
         {
-            return SimulateInternal(seed, character, ascension, act1Key, includeCardReward);
+            return body();
+        }
+        finally
+        {
+            AscensionOverride = previous;
+        }
+    }
+
+    public static SimResult? Simulate(GameData data, string rawSeed, SimParts parts)
+    {
+        string seed = SeedHelper.CanonicalizeSeed(rawSeed);
+        try
+        {
+            return WithAscension(data.Ascension, () => SimulateInternal(data, seed, parts));
         }
         catch (Exception e)
         {
             if (!_loggedFailure)
             {
                 _loggedFailure = true;
-                MainFile.Logger.Error($"Seed inspector could not simulate seed {seed}. The game probably updated. {e}");
+                MainFile.Logger.Error($"Seed search could not simulate seed {seed}. The game probably updated. {e}");
             }
 
             return null;
         }
-        finally
-        {
-            AscensionOverride = null;
-        }
     }
 
-    private static SeedPreview SimulateInternal(string seed, CharacterModel character, int ascension, string act1Key, bool includeCardReward)
+    // Everything up to the point where generation starts. Call inside WithAscension.
+    public static Run CreateRun(string seed, CharacterModel character, int ascension, string act1Key)
     {
         UnlockState unlocks = SaveManager.Instance.GenerateUnlockStateFromProgress();
 
@@ -93,6 +115,12 @@ public static class SeedSimulator
             GameMode.Custom,
             ascension,
             seed);
+        return new Run(state, player, unlocks);
+    }
+
+    private static SimResult SimulateInternal(GameData data, string seed, SimParts parts)
+    {
+        (RunState state, Player player, _) = CreateRun(seed, data.Character, data.Ascension, data.Act1Key);
 
         // RunManager.InitializeNewRun
         Rng upFront = state.Rng.UpFront;
@@ -120,26 +148,40 @@ public static class SeedSimulator
             }
         }
 
-        ActModel act1 = state.Acts[0];
-        RoomSet act1Rooms = (RoomSet)RoomsField.GetValue(act1)!;
+        List<RoomSet> rooms = state.Acts.Select(a => (RoomSet)RoomsField.GetValue(a)!).ToList();
+        EncounterModel? secondBoss = state.Acts[^1].SecondBossEncounter;
+        AncientEventModel? act1Ancient = rooms[0].HasAncient ? rooms[0].Ancient : null;
 
-        return new SeedPreview
+        SimResult result = new()
         {
             Seed = seed,
-            Acts = state.Acts.Select(a => a.Title.GetFormattedText()).ToList(),
-            Bosses = state.Acts.Select(a => a.BossEncounter.Title.GetFormattedText()).ToList(),
-            SecondBoss = state.Acts[^1].SecondBossEncounter?.Title.GetFormattedText(),
-            Ancients = state.Acts.Select(a => a.Ancient.Title.GetFormattedText()).ToList(),
-            NeowOffers = GetAncientOffers(act1.Ancient, player, state),
-            Act1Events = act1Rooms.events.Take(EventsShown).Select(e => e.Title.GetFormattedText()).ToList(),
-            Act1Map = DescribeMap(state, act1),
-            // Last, because it advances the player's rewards stream.
-            FirstCardReward = includeCardReward ? GetFirstCardReward(player, act1Rooms) : null
+            Acts = state.Acts.Select(a => data.Acts.Id(a)).ToArray(),
+            Bosses = rooms.Select(r => data.Encounters.Id(r.Boss)).ToArray(),
+            SecondBoss = secondBoss == null ? -1 : data.Encounters.Id(secondBoss),
+            Ancients = rooms.Select(r => r.HasAncient ? data.Ancients.Id(r.Ancient) : -1).ToArray(),
+            Events = rooms.Select(r => r.events.Select(e => data.Events.Id(e)).ToArray()).ToArray(),
+            Normals = rooms.Select(r => r.normalEncounters.Select(e => data.Encounters.Id(e)).ToArray()).ToArray(),
+            Elites = rooms.Select(r => r.eliteEncounters.Select(e => data.Encounters.Id(e)).ToArray()).ToArray(),
+            SharedRelics = Deques(data, state.SharedRelicGrabBag),
+            PlayerRelics = Deques(data, player.RelicGrabBag),
+            Neow = act1Ancient != null && data.Ancients.Id(act1Ancient) == data.NeowId ? GetAncientOffers(data, act1Ancient, player, state) : [],
+            Maps = state.Acts.Select((a, i) => parts.HasFlag(SimParts.Maps) ? BuildMap(state, a, i) : null).ToArray()
         };
+
+        // Last, because it advances the player's rewards stream.
+        if (parts.HasFlag(SimParts.Reward))
+            AddFirstReward(data, result, player, rooms[0]);
+        return result;
+    }
+
+    private static List<RelicDeque> Deques(GameData data, RelicGrabBag bag)
+    {
+        var deques = (Dictionary<RelicRarity, List<RelicModel>>)DequesField.GetValue(bag)!;
+        return deques.Select(d => new RelicDeque { Rarity = (int)d.Key, Relics = d.Value.Select(r => data.Relics.Id(r)).ToArray() }).ToList();
     }
 
     // EventModel.BeginEvent, minus everything that touches the scene.
-    private static List<string> GetAncientOffers(AncientEventModel ancient, Player player, RunState state)
+    private static int[] GetAncientOffers(GameData data, AncientEventModel ancient, Player player, RunState state)
     {
         EventModel ev = ancient.ToMutable();
         ulong slot = ev.IsShared ? 0uL : (ulong)state.GetPlayerSlotIndex(player);
@@ -147,33 +189,51 @@ public static class SeedSimulator
         RngSetter.Invoke(ev, [new Rng(state.Rng.Seed + slot + StringHelper.GetDeterministicHashCode(ev.Id.Entry))]);
 
         var options = (IReadOnlyList<EventOption>)InitialOptions.Invoke(ev, null)!;
-        return options.Select(o => o.Relic?.Title.GetFormattedText() ?? o.Title.GetFormattedText()).ToList();
+        return options.Select(o => o.Relic == null ? -1 : data.Relics.Id(o.Relic)).ToArray();
     }
 
     // StandardActMap.CreateFor
-    private static string DescribeMap(RunState state, ActModel act)
+    private static MapResult? BuildMap(RunState state, ActModel act, int actIndex)
     {
-        StandardActMap map = new(new Rng(state.Rng.Seed, "act_1_map"), act, false, false, act.HasSecondBoss);
+        StandardActMap map;
+        try
+        {
+            map = new StandardActMap(new Rng(state.Rng.Seed, $"act_{actIndex + 1}_map"), act, false, false, act.HasSecondBoss);
+        }
+        catch (InvalidOperationException)
+        {
+            return null;
+        }
+
         List<MapPoint> points = map.GetAllMapPoints().ToList();
-        int Count(MapPointType type) => points.Count(p => p.PointType == type);
-        return $"{Count(MapPointType.Elite)} elites, {Count(MapPointType.RestSite)} rests, {Count(MapPointType.Unknown)} unknown, {Count(MapPointType.Shop)} shops";
+        return new MapResult
+        {
+            Points = points.Select(p => (int[]) [p.coord.col, p.coord.row, (int)p.PointType]).ToArray(),
+            Edges = points
+                .SelectMany(p => p.Children.Where(c => c.PointType != MapPointType.Boss).Select(c => (int[]) [p.coord.col, p.coord.row, c.coord.col, c.coord.row]))
+                .OrderBy(e => e[0]).ThenBy(e => e[1]).ThenBy(e => e[2]).ThenBy(e => e[3])
+                .ToArray()
+        };
     }
 
     // RewardsSet.GenerateRewardsFor for a normal combat: potion roll, then gold, potion and cards
     // are populated in that order, all from the player's rewards stream.
-    private static List<string> GetFirstCardReward(Player player, RoomSet act1Rooms)
+    private static void AddFirstReward(GameData data, SimResult result, Player player, RoomSet act1Rooms)
     {
         EncounterModel encounter = act1Rooms.normalEncounters[0];
         bool potionDropped = player.PlayerOdds.PotionReward.Roll(player, RoomType.Monster);
-        new GoldReward(encounter.MinGoldReward, encounter.MaxGoldReward, player).Populate();
+        GoldReward gold = new(encounter.MinGoldReward, encounter.MaxGoldReward, player);
+        gold.Populate();
+        result.Gold = gold.Amount;
         if (potionDropped)
         {
-            PotionFactory.CreateRandomPotionOutOfCombat(player, player.PlayerRng.Rewards);
+            PotionModel? potion = PotionFactory.CreateRandomPotionOutOfCombat(player, player.PlayerRng.Rewards);
+            result.Potion = potion == null ? -1 : data.Potions.Id(potion);
         }
 
         CardCreationOptions options = CardCreationOptions.ForRoom(player, RoomType.Monster)
             .WithFlags(CardCreationFlags.IsFromCombat)
             .WithFlags(CardCreationFlags.IsCardReward);
-        return CardFactory.CreateForReward(player, 3, options).Select(c => c.Card.Title).ToList();
+        result.Cards = CardFactory.CreateForReward(player, 3, options).Select(c => data.Cards.Id(c.Card)).ToArray();
     }
 }

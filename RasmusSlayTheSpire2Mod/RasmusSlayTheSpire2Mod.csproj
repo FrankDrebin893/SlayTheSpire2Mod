@@ -34,6 +34,22 @@
                 Condition="'$(Sts2DataDir)' == '' or !Exists('$(Sts2DataDir)')"/>
     </Target>
 
+    <!-- The Rust seed engine (../seed-engine). Windows x64 only; elsewhere, or with
+         /p:SkipRustBuild=true, the mod falls back to its slow C# seed search. -->
+    <PropertyGroup>
+        <SeedEngineDir>$(MSBuildProjectDirectory)/../seed-engine</SeedEngineDir>
+        <SeedEngineDll>$(SeedEngineDir)/target/release/sts2_seed_engine.dll</SeedEngineDll>
+        <BuildSeedEngine Condition="'$(SkipRustBuild)' != 'true' And $([MSBuild]::IsOSPlatform('Windows'))">true</BuildSeedEngine>
+    </PropertyGroup>
+
+    <Target Name="BuildSeedEngine" BeforeTargets="BeforeBuild" Condition="'$(BuildSeedEngine)' == 'true'">
+        <Exec Command="cargo build --release" WorkingDirectory="$(SeedEngineDir)"/>
+    </Target>
+
+    <Target Name="CopySeedEngineToModsFolder" AfterTargets="CopyToModsFolderOnBuild" Condition="Exists('$(SeedEngineDll)')">
+        <Copy SourceFiles="$(SeedEngineDll)" DestinationFolder="$(ModsPath)$(MSBuildProjectName)/"/>
+    </Target>
+
     <Target Name="CopyToModsFolderOnBuild" AfterTargets="PostBuildEvent">
         <Message Text="Copying .dll .pdb and .json to mods folder." Importance="high"/>
         <Copy SourceFiles="$(TargetPath)" DestinationFolder="$(ModsPath)$(MSBuildProjectName)/"/>

@@ -4,15 +4,16 @@ Built against game version 0.111.0.
 
 ## Mods
 
-- `CheaperMasterPlanner/` – Master Planner costs 1 energy instead of 2 (0 upgraded). Code-only (Harmony), no BaseLib, no `.pck`.
+- `RasmusSlayTheSpire2Mod/` – general mod for card tweaks. Code-only (Harmony), no BaseLib, no `.pck`.
+  - Master Planner costs 1 energy instead of 2 (0 upgraded).
 
 ## Build and test
 
 ```
-dotnet build CheaperMasterPlanner -c Release
+dotnet build RasmusSlayTheSpire2Mod -c Release
 ```
 
-The build copies the `.dll`, `.pdb` and `.json` to `<Slay the Spire 2>/mods/CheaperMasterPlanner/`. The game path is found by `Sts2PathDiscovery.props`; override with `/p:Sts2Path=...` if needed.
+The build copies the `.dll`, `.pdb` and `.json` to `<Slay the Spire 2>/mods/RasmusSlayTheSpire2Mod/`. The game path is found by `Sts2PathDiscovery.props`; override with `/p:Sts2Path=...` if needed.
 
 Restart the game, check Settings > Mod Settings, then look up the card in the Card Library. Logs are in `%APPDATA%/SlayTheSpire2/logs/godot.log`; the mod logs one line when the patch applies. The dev console (`~`, then `help card`) can spawn cards in a run.
 

@@ -2,7 +2,7 @@ using System.Reflection.Emit;
 using HarmonyLib;
 using MegaCrit.Sts2.Core.Models.Cards;
 
-namespace CheaperMasterPlanner;
+namespace RasmusSlayTheSpire2Mod;
 
 // MasterPlanner's constructor is `base(2, CardType.Power, CardRarity.Rare, TargetType.Self)`.
 // The first constant it loads is the canonical energy cost, so that is the one we lower.

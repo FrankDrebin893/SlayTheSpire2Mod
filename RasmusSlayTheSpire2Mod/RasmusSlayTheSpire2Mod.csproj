@@ -25,7 +25,7 @@
     </ItemGroup>
 
     <ItemGroup>
-        <None Include="CheaperMasterPlanner.json"/>
+        <None Include="RasmusSlayTheSpire2Mod.json"/>
     </ItemGroup>
 
     <Target Name="CheckDependencyPaths">

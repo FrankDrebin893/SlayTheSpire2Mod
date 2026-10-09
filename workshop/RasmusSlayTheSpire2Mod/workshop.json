@@ -1,0 +1,9 @@
+{
+  "title": "Rasmus' Slay the Spire 2 Mod",
+  "description": "Card tweaks.\n\nMaster Planner costs 1 less energy: 1 instead of 2, and 0 when upgraded.\n\nChanges gameplay, so everyone in a multiplayer lobby needs the mod. Built for game version 0.111.0. No dependencies.",
+  "visibility": "private",
+  "changeNote": "Initial release.",
+  "tags": [],
+  "dependencies": [],
+  "contentDescriptors": []
+}

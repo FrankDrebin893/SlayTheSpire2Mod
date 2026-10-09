@@ -11,6 +11,9 @@ using MegaCrit.Sts2.Core.Factories;
 using MegaCrit.Sts2.Core.Map;
 using MegaCrit.Sts2.Core.Models;
 using MegaCrit.Sts2.Core.Models.Acts;
+using MegaCrit.Sts2.Core.Models.CardPools;
+using MegaCrit.Sts2.Core.Models.Cards;
+using MegaCrit.Sts2.Core.Models.Characters;
 using MegaCrit.Sts2.Core.Models.Events;
 using MegaCrit.Sts2.Core.Models.RelicPools;
 using MegaCrit.Sts2.Core.Models.Relics;
@@ -90,6 +93,13 @@ public sealed class GameData
     public int[] NeowRelics { get; private set; } = [];
     public int NeowId { get; private set; } = -1;
     public int[] RewardCards { get; private set; } = [];
+    public int[] PotionOptions { get; private set; } = [];
+    public int[] ColorlessCards { get; private set; } = [];
+    public int[] OtherCharacterCards { get; private set; } = [];
+    public int[] Curses { get; private set; } = [];
+    public int[] BonesRelics { get; private set; } = [];
+    // The cursed offers, for marking them in the pickers.
+    public int[] NeowCurses { get; private set; } = [];
     public bool DoubleBoss { get; private set; }
     public string SnapshotJson { get; private set; } = "";
 
@@ -164,25 +174,17 @@ public sealed class GameData
             SharedBag = WriteBag(w, "shared_bag", shared);
             PlayerBag = WriteBag(w, "player_bag", mine);
 
-            WriteNeow(w, player);
+            WriteNeow(w, run, mine);
 
             List<CardModel> cards = CardCreationOptions.ForRoom(player, RoomType.Monster).GetPossibleCards(player)
                 .Where(c => c.MultiplayerConstraint != CardMultiplayerConstraint.MultiplayerOnly)
                 .ToList();
-            RewardCards = cards.Select(c => Cards.Id(c)).ToArray();
-            w.WriteStartArray("cards");
-            foreach (CardModel c in cards)
-            {
-                w.WriteStartObject();
-                w.WriteNumber("id", Cards.Id(c));
-                w.WriteNumber("rarity", (int)c.Rarity);
-                w.WriteEndObject();
-            }
+            RewardCards = WriteCards(w, "cards", cards);
 
-            w.WriteEndArray();
-
+            List<PotionModel> potions = PotionFactory.GetPotionOptions(player).ToList();
+            PotionOptions = potions.Select(p => Potions.Id(p)).ToArray();
             w.WriteStartArray("potions");
-            foreach (PotionModel p in PotionFactory.GetPotionOptions(player))
+            foreach (PotionModel p in potions)
                 w.WriteInts([Potions.Id(p), (int)p.Rarity]);
             w.WriteEndArray();
 
@@ -309,11 +311,72 @@ public sealed class GameData
         return relics.Select(r => Relics.Id(r)).ToArray();
     }
 
-    // The option tables of Neow.GenerateInitialOptions, read off a Neow owned by a real player so
-    // IsAllowedAtNeow can be asked of each relic. Which curse removes which positive option is
-    // code in that method and is restated here.
-    private void WriteNeow(Utf8JsonWriter w, Player player)
+    // The Neow relics whose AfterObtained rolls something, as the kind the Rust engine knows them
+    // by and the count the relic states. SeedSimulator.NeowOutcome is the game-code counterpart.
+    public static (string Kind, int Count)? NeowGiveOf(RelicModel relic) => relic switch
     {
+        ArcaneScroll => ("arcane_scroll", relic.DynamicVars.Cards.IntValue),
+        HeftyTablet => ("hefty_tablet", relic.DynamicVars.Cards.IntValue),
+        LeadPaperweight => ("lead_paperweight", 2),
+        LostCoffer => ("lost_coffer", 3),
+        ScrollBoxes => ("scroll_boxes", 2),
+        SmallCapsule => ("small_capsule", 1),
+        LargeCapsule => ("large_capsule", relic.DynamicVars["Relics"].IntValue),
+        NeowsBones => ("neows_bones", relic.DynamicVars["Relics"].IntValue),
+        Kaleidoscope => ("kaleidoscope", relic.DynamicVars.Cards.IntValue),
+        PhialHolster => ("phial_holster", relic.DynamicVars["Potions"].IntValue),
+        LeafyPoultice => ("leafy_poultice", 2),
+        NewLeaf => ("new_leaf", relic.DynamicVars.Cards.IntValue),
+        _ => null
+    };
+
+    // Everything a Neow relic can hand out, for the pickers. All empty for a relic without a roll.
+    public (int[] Cards, int[] Relics, int[] Potions) NeowGiveOptions(int relic)
+    {
+        int[] OfRarity(params CardRarity[] rarities) => RewardCards.Where(c => rarities.Contains(Cards[c].Rarity)).ToArray();
+        return Relics[relic] switch
+        {
+            ArcaneScroll or HeftyTablet => (OfRarity(CardRarity.Rare), [], []),
+            LeadPaperweight => (ColorlessCards, [], []),
+            LostCoffer => (OfRarity(CardRarity.Common, CardRarity.Uncommon, CardRarity.Rare), [], PotionOptions),
+            ScrollBoxes => (OfRarity(CardRarity.Common, CardRarity.Uncommon), [], []),
+            SmallCapsule or LargeCapsule => ([], PlayerBag.Where(r => Relics[r].Rarity is RelicRarity.Common or RelicRarity.Uncommon or RelicRarity.Rare).ToArray(), []),
+            NeowsBones => (Curses, BonesRelics, []),
+            Kaleidoscope => (OtherCharacterCards, [], []),
+            PhialHolster => ([], [], PotionOptions),
+            LeafyPoultice or NewLeaf => (OfRarity(CardRarity.Common, CardRarity.Uncommon, CardRarity.Rare), [], []),
+            _ => ([], [], [])
+        };
+    }
+
+    private int[] WriteCards(Utf8JsonWriter w, string name, IEnumerable<CardModel> cards)
+    {
+        List<int> ids = [];
+        w.WriteStartArray(name);
+        WriteCardList(w, cards, ids);
+        w.WriteEndArray();
+        return ids.ToArray();
+    }
+
+    private void WriteCardList(Utf8JsonWriter w, IEnumerable<CardModel> cards, List<int> ids)
+    {
+        foreach (CardModel c in cards)
+        {
+            ids.Add(Cards.Id(c));
+            w.WriteStartObject();
+            w.WriteNumber("id", Cards.Id(c));
+            w.WriteNumber("rarity", (int)c.Rarity);
+            w.WriteEndObject();
+        }
+    }
+
+    // The option tables of Neow.GenerateInitialOptions, read off a Neow owned by a real player so
+    // IsAllowedAtNeow can be asked of each relic, and the pools the relics draw from when they
+    // are obtained. Which curse removes which positive option is code in that method and is
+    // restated here.
+    private void WriteNeow(Utf8JsonWriter w, SeedSimulator.Run run, List<RelicModel> playerBag)
+    {
+        Player player = run.Player;
         Neow canonical = ModelDb.AncientEvent<Neow>();
         if (!SlotActs[0].Any(a => ActInfos[a].Ancients.Contains(Ancients.Id(canonical))))
         {
@@ -348,6 +411,7 @@ public sealed class GameData
             One("StoneHumidifierOption"), One("NeowsTalismanOption"), One("PomanderOption")
         ];
         NeowRelics = curse.Concat(positive).Concat(extras).Where(r => !disallowed.Contains(r)).Distinct().ToArray();
+        NeowCurses = curse;
 
         w.WriteStartObject("neow");
         w.WriteString("entry", canonical.Id.Entry);
@@ -370,6 +434,57 @@ public sealed class GameData
         w.WriteInts([Relic<NeowsSacrifice>(), Relic<LostCoffer>()]);
         w.WriteEndArray();
         w.WriteInts("disallowed", disallowed);
+
+        w.WriteStartArray("gives");
+        foreach (int id in NeowRelics)
+        {
+            if (NeowGiveOf(Relics[id]) is not (string kind, int count))
+                continue;
+            w.WriteStartObject();
+            w.WriteNumber("relic", id);
+            w.WriteString("kind", kind);
+            w.WriteNumber("count", count);
+            w.WriteEndObject();
+        }
+
+        w.WriteEndArray();
+
+        CardMultiplayerConstraint constraint = player.RunState.CardMultiplayerConstraint;
+        IEnumerable<CardModel> Unlocked(CardPoolModel pool) =>
+            pool.GetUnlockedCards(run.Unlocks, constraint).Where(c => c.MultiplayerConstraint != CardMultiplayerConstraint.MultiplayerOnly);
+
+        ColorlessCards = WriteCards(w, "colorless", Unlocked(ModelDb.CardPool<ColorlessCardPool>()));
+
+        // Kaleidoscope shuffles these with StableShuffle, which sorts them first.
+        List<CardPoolModel> others = run.Unlocks.CharacterCardPools.Where(p => p != Character.CardPool).ToList();
+        others.Sort();
+        List<int> otherCards = [];
+        w.WriteStartArray("other_pools");
+        foreach (CardPoolModel pool in others)
+        {
+            w.WriteStartArray();
+            WriteCardList(w, Unlocked(pool), otherCards);
+            w.WriteEndArray();
+        }
+
+        w.WriteEndArray();
+        OtherCharacterCards = otherCards.ToArray();
+
+        // NeowsBones.AfterObtained
+        Curses = ModelDb.CardPool<CurseCardPool>().GetUnlockedCards(run.Unlocks, constraint)
+            .Where(c => c.CanBeGeneratedByModifiers)
+            .OrderBy(c => c.Id)
+            .Select(c => Cards.Id(c))
+            .ToArray();
+        w.WriteInts("curses", Curses);
+        BonesRelics = SeedSimulator.BonesRelics(player).Select(r => Relics.Id(r)).ToArray();
+        w.WriteInts("bones", BonesRelics);
+
+        if (Character is Defect)
+            w.WriteNumber("claw", Cards.Id(ModelDb.Card<Claw>()));
+        else
+            w.WriteNull("claw");
+        w.WriteInts("bag_disallowed", playerBag.Where(r => !r.IsAllowed(run.State)).Select(r => Relics.Id(r)));
         w.WriteEndObject();
     }
 }

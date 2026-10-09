@@ -53,6 +53,44 @@ public sealed record NeowOfferCond(int Relic) : Cond
     public override string Describe(GameData d) => $"Neow offers {d.RelicName(Relic)}";
 }
 
+public enum GiveItem
+{
+    Card,
+    Relic,
+    Potion
+}
+
+public sealed record NeowGivesCond(int Relic, GiveItem What, int Item) : Cond
+{
+    public override SimParts Needs => SimParts.NeowOutcomes;
+
+    public override void Write(Utf8JsonWriter w)
+    {
+        w.WriteString("kind", "neow_gives");
+        w.WriteNumber("relic", Relic);
+        w.WriteString("what", What.ToString().ToLowerInvariant());
+        w.WriteNumber("item", Item);
+    }
+
+    public override bool Matches(SimResult r)
+    {
+        int offer = Array.IndexOf(r.Neow, Relic);
+        if (offer < 0 || offer >= r.NeowOutcomes.Length)
+            return false;
+        NeowOutcome o = r.NeowOutcomes[offer];
+        return (What switch { GiveItem.Card => o.Cards, GiveItem.Relic => o.Relics, _ => o.Potions }).Contains(Item);
+    }
+
+    public string ItemName(GameData d) => What switch
+    {
+        GiveItem.Card => d.CardName(Item),
+        GiveItem.Relic => d.RelicName(Item),
+        _ => d.PotionName(Item)
+    };
+
+    public override string Describe(GameData d) => $"Neow offers {d.RelicName(Relic)} and it gives {ItemName(d)}";
+}
+
 public sealed record ActCond(int Slot, int Act) : Cond
 {
     public override void Write(Utf8JsonWriter w)

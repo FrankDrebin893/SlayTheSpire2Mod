@@ -2,6 +2,7 @@ using System.Reflection;
 using System.Runtime.CompilerServices;
 using HarmonyLib;
 using MegaCrit.Sts2.Core.Entities.Ascension;
+using MegaCrit.Sts2.Core.Entities.Cards;
 using MegaCrit.Sts2.Core.Entities.Players;
 using MegaCrit.Sts2.Core.Entities.Relics;
 using MegaCrit.Sts2.Core.Events;
@@ -11,6 +12,8 @@ using MegaCrit.Sts2.Core.Helpers;
 using MegaCrit.Sts2.Core.Map;
 using MegaCrit.Sts2.Core.Models;
 using MegaCrit.Sts2.Core.Models.Acts;
+using MegaCrit.Sts2.Core.Models.CardPools;
+using MegaCrit.Sts2.Core.Models.Relics;
 using MegaCrit.Sts2.Core.Models.RelicPools;
 using MegaCrit.Sts2.Core.Odds;
 using MegaCrit.Sts2.Core.Random;
@@ -28,7 +31,8 @@ public enum SimParts
     None = 0,
     Reward = 1,
     Maps = 2,
-    All = Reward | Maps
+    NeowOutcomes = 4,
+    All = Reward | Maps | NeowOutcomes
 }
 
 // Builds a detached RunState for a seed and runs the game's own start-of-run generation on it,
@@ -42,6 +46,7 @@ public static class SeedSimulator
     private static readonly MethodInfo RngSetter = AccessTools.PropertySetter(typeof(EventModel), nameof(EventModel.Rng));
     private static readonly MethodInfo InitialOptions = AccessTools.Method(typeof(EventModel), "GenerateInitialOptionsWrapper");
     private static readonly FieldInfo DequesField = AccessTools.Field(typeof(RelicGrabBag), "_deques");
+    private static readonly MethodInfo BonesValidRelics = AccessTools.Method(typeof(NeowsBones), "GetValidRelics");
 
     // Non-null only while a simulation runs. SimulationPatches reads it so that ascension checks,
     // which normally ask the RunManager singleton, see the ascension being previewed.
@@ -118,15 +123,21 @@ public static class SeedSimulator
         return new Run(state, player, unlocks);
     }
 
+    // CreateRun followed by RunManager.InitializeNewRun.
+    private static Run StartRun(GameData data, string seed)
+    {
+        Run run = CreateRun(seed, data.Character, data.Ascension, data.Act1Key);
+        Rng upFront = run.State.Rng.UpFront;
+        run.State.SharedRelicGrabBag.Populate(ModelDb.RelicPool<SharedRelicPool>().GetUnlockedRelics(run.State.UnlockState), upFront);
+        run.Player.PopulateRelicGrabBagIfNecessary(upFront);
+        AscensionOverride!.ApplyEffectsTo(run.Player);
+        return run;
+    }
+
     private static SimResult SimulateInternal(GameData data, string seed, SimParts parts)
     {
-        (RunState state, Player player, _) = CreateRun(seed, data.Character, data.Ascension, data.Act1Key);
-
-        // RunManager.InitializeNewRun
+        (RunState state, Player player, _) = StartRun(data, seed);
         Rng upFront = state.Rng.UpFront;
-        state.SharedRelicGrabBag.Populate(ModelDb.RelicPool<SharedRelicPool>().GetUnlockedRelics(state.UnlockState), upFront);
-        player.PopulateRelicGrabBagIfNecessary(upFront);
-        AscensionOverride!.ApplyEffectsTo(player);
 
         // RunManager.GenerateRooms
         List<AncientEventModel> sharedAncients = state.UnlockState.SharedAncients.ToList().UnstableShuffle(upFront);
@@ -142,7 +153,7 @@ public static class SeedSimulator
         {
             ActModel act = state.Acts[i];
             act.GenerateRooms(upFront, state.UnlockState, false);
-            if (i == state.Acts.Count - 1 && AscensionOverride.HasLevel(AscensionLevel.DoubleBoss))
+            if (i == state.Acts.Count - 1 && AscensionOverride!.HasLevel(AscensionLevel.DoubleBoss))
             {
                 act.SetSecondBossEncounter(upFront.NextItem(act.AllBossEncounters.Where(e => e.Id != act.BossEncounter.Id)));
             }
@@ -168,6 +179,9 @@ public static class SeedSimulator
             Maps = state.Acts.Select((a, i) => parts.HasFlag(SimParts.Maps) ? BuildMap(state, a, i) : null).ToArray()
         };
 
+        if (parts.HasFlag(SimParts.NeowOutcomes))
+            result.NeowOutcomes = result.Neow.Select(relic => NeowOutcome(data, seed, relic)).ToArray();
+
         // Last, because it advances the player's rewards stream.
         if (parts.HasFlag(SimParts.Reward))
             AddFirstReward(data, result, player, rooms[0]);
@@ -190,6 +204,90 @@ public static class SeedSimulator
 
         var options = (IReadOnlyList<EventOption>)InitialOptions.Invoke(ev, null)!;
         return options.Select(o => o.Relic == null ? -1 : data.Relics.Id(o.Relic)).ToArray();
+    }
+
+    // NeowsBones.GetValidRelics
+    public static List<RelicModel> BonesRelics(Player player) => ((IEnumerable<RelicModel>)BonesValidRelics.Invoke(null, [player])!).ToList();
+
+    // AfterObtained of one Neow relic up to the point where the player is shown the result, on a
+    // run of its own so that the relic is the first thing to draw from its streams. Each case
+    // repeats what the relic does with the game's own factories.
+    private static NeowOutcome NeowOutcome(GameData data, string seed, int relicId)
+    {
+        NeowOutcome outcome = new();
+        if (relicId < 0 || GameData.NeowGiveOf(data.Relics[relicId]) is not (_, int count))
+            return outcome;
+
+        (RunState state, Player player, _) = StartRun(data, seed);
+        Rng rewards = player.PlayerRng.Rewards;
+        CardPoolModel pool = player.Character.CardPool;
+        List<CardModel> cards = [];
+        List<RelicModel> relics = [];
+        List<PotionModel> potions = [];
+        IEnumerable<CardModel> Create(int n, CardCreationOptions options) => CardFactory.CreateForReward(player, n, options).Select(r => r.Card);
+        IEnumerable<CardModel> Basics() => PileType.Deck.GetPile(player).Cards.Where(c => c.Rarity == CardRarity.Basic);
+
+        switch (data.Relics[relicId])
+        {
+            case ArcaneScroll or HeftyTablet:
+                cards.AddRange(Create(count, new CardCreationOptions([pool], CardCreationSource.Other, CardRarityOddsType.Uniform, c => c.Rarity == CardRarity.Rare).WithFlags(CardCreationFlags.NoUpgradeRoll)));
+                break;
+            case LeadPaperweight:
+                cards.AddRange(Create(count, new CardCreationOptions([ModelDb.CardPool<ColorlessCardPool>()], CardCreationSource.Other, CardRarityOddsType.RegularEncounter)));
+                break;
+            case LostCoffer:
+                // RewardsSet populates its rewards in the order the relic lists them.
+                cards.AddRange(Create(count, new CardCreationOptions([pool], CardCreationSource.Other, CardRarityOddsType.RegularEncounter).WithFlags(CardCreationFlags.IsCardReward)));
+                potions.Add(PotionFactory.CreateRandomPotionOutOfCombat(player, rewards));
+                break;
+            case ScrollBoxes:
+                cards.AddRange(ScrollBoxes.GenerateRandomBundles(player).SelectMany(bundle => bundle));
+                break;
+            case SmallCapsule or LargeCapsule:
+                for (int i = 0; i < count; i++)
+                    relics.Add(RelicFactory.PullNextRelicFromFront(player));
+                break;
+            case NeowsBones:
+                List<RelicModel> valid = BonesRelics(player);
+                rewards.Shuffle(valid);
+                relics.AddRange(valid.Take(count));
+                List<CardModel> curses = ModelDb.CardPool<CurseCardPool>().GetUnlockedCards(player.UnlockState, player.RunState.CardMultiplayerConstraint)
+                    .Where(c => c.CanBeGeneratedByModifiers)
+                    .OrderBy(c => c.Id)
+                    .ToList();
+                if (state.Rng.Niche.NextItem(curses) is { } curse)
+                    cards.Add(curse);
+                break;
+            case Kaleidoscope:
+                for (int i = 0; i < count; i++)
+                {
+                    foreach (CardPoolModel other in player.UnlockState.CharacterCardPools.Where(p => p != pool).ToList().StableShuffle(state.Rng.Niche).Take(3))
+                        cards.AddRange(Create(1, new CardCreationOptions([other], CardCreationSource.Other, CardRarityOddsType.RegularEncounter).WithFlags(CardCreationFlags.NoCardPoolModifications)));
+                }
+
+                break;
+            case PhialHolster:
+                potions.AddRange(PotionFactory.CreateRandomPotionsOutOfCombat(player, count, state.Rng.CombatPotionGeneration));
+                break;
+            case LeafyPoultice:
+                CardModel?[] originals = [Basics().FirstOrDefault(c => c.Tags.Contains(CardTag.Strike)), Basics().FirstOrDefault(c => c.Tags.Contains(CardTag.Defend))];
+                foreach (CardModel? original in originals)
+                {
+                    if (original != null)
+                        cards.Add(CardFactory.CreateRandomCardForTransform(original, false, player.PlayerRng.Transformations));
+                }
+
+                break;
+            case NewLeaf:
+                if (Basics().FirstOrDefault() is { } chosen)
+                    cards.Add(CardFactory.CreateRandomCardForTransform(chosen, false, state.Rng.Niche));
+                break;
+        }
+
+        outcome.Cards = cards.Select(c => data.Cards.Id(c)).ToArray();
+        outcome.Relics = relics.Select(r => data.Relics.Id(r)).ToArray();
+        outcome.Potions = potions.Where(p => p != null).Select(p => data.Potions.Id(p)).ToArray();
+        return outcome;
     }
 
     // StandardActMap.CreateFor

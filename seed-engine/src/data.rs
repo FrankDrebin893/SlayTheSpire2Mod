@@ -56,9 +56,48 @@ pub struct NeowData {
     pub exclusions: Vec<[u32; 2]>,
     /// Relics for which IsAllowedAtNeow is false.
     pub disallowed: Vec<u32>,
+    /// The Neow relics that roll something when obtained.
+    pub gives: Vec<Give>,
+    /// ColorlessCardPool, unlocked.
+    pub colorless: Vec<CardData>,
+    /// The card pools of the other characters, sorted the way StableShuffle sorts them.
+    pub other_pools: Vec<Vec<CardData>>,
+    /// Curses Neow's Bones can add, ordered by id.
+    pub curses: Vec<u32>,
+    /// NeowsBones.GetValidRelics
+    pub bones: Vec<u32>,
+    /// Claw, only for the Defect: Scroll Boxes can roll a bundle of three.
+    pub claw: Option<u32>,
+    /// Relics in the player bag for which IsAllowed is false at the start of a run.
+    pub bag_disallowed: Vec<u32>,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum GiveKind {
+    ArcaneScroll,
+    HeftyTablet,
+    LeadPaperweight,
+    LostCoffer,
+    ScrollBoxes,
+    SmallCapsule,
+    LargeCapsule,
+    NeowsBones,
+    Kaleidoscope,
+    PhialHolster,
+    LeafyPoultice,
+    NewLeaf,
+}
+
+#[derive(Deserialize, Clone, Copy)]
+pub struct Give {
+    pub relic: u32,
+    pub kind: GiveKind,
+    /// The count the relic states (cards, relics or potions), read from its DynamicVars.
+    pub count: usize,
+}
+
+#[derive(Deserialize, Clone, Copy)]
 pub struct CardData {
     pub id: u32,
     /// CardRarity as int

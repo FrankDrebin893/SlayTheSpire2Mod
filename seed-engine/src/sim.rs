@@ -2,7 +2,7 @@
 //! search, which only computes the stages its conditions need, cheapest first.
 
 use crate::data::Snapshot;
-use crate::gen::{self, RelicDeque, UpFront};
+use crate::gen::{self, Outcome, RelicDeque, UpFront};
 use crate::map::{self, MapOut};
 use crate::rng::hash;
 use serde::{Deserialize, Serialize};
@@ -34,10 +34,19 @@ pub struct SimOut {
     pub shared_relics: Vec<DequeOut>,
     pub player_relics: Vec<DequeOut>,
     pub neow: Vec<u32>,
+    /// What each offer in `neow` gives when taken.
+    pub neow_outcomes: Vec<OutcomeOut>,
     pub gold: i32,
     pub potion: i32,
     pub cards: Vec<u32>,
     pub maps: Vec<Option<MapJson>>,
+}
+
+#[derive(Serialize)]
+pub struct OutcomeOut {
+    pub cards: Vec<u32>,
+    pub relics: Vec<u32>,
+    pub potions: Vec<u32>,
 }
 
 fn deques(d: Vec<RelicDeque>) -> Vec<DequeOut> {
@@ -66,6 +75,13 @@ pub fn simulate(snap: &Snapshot, seed_text: &str) -> SimOut {
     let first_encounter = up.normals.first().and_then(|n| n.first()).copied();
     let reward = gen::first_reward(snap, seed, first_encounter);
     let neow = neow_for(snap, seed, up.ancients.first().copied().unwrap_or(gen::NONE));
+    let neow_outcomes = neow
+        .iter()
+        .map(|&relic| {
+            let Outcome { cards, relics, potions } = gen::neow_outcome(snap, seed, relic);
+            OutcomeOut { cards, relics, potions }
+        })
+        .collect();
     let maps = acts
         .iter()
         .enumerate()
@@ -84,11 +100,20 @@ pub fn simulate(snap: &Snapshot, seed_text: &str) -> SimOut {
         shared_relics: deques(up.shared_relics),
         player_relics: deques(up.player_relics),
         neow,
+        neow_outcomes,
         gold: reward.gold,
         potion: reward.potion,
         cards: reward.cards,
         maps,
     }
+}
+
+#[derive(Deserialize, Clone, Copy)]
+#[serde(rename_all = "snake_case")]
+pub enum Item {
+    Card,
+    Relic,
+    Potion,
 }
 
 /// One search condition; a seed must satisfy all of them.
@@ -99,6 +124,8 @@ pub enum Cond {
     NeowOffer { relic: u32 },
     /// The cursed (third) Neow option.
     NeowCurse { relic: u32 },
+    /// The relic is offered and taking it gives the item.
+    NeowGives { relic: u32, what: Item, item: u32 },
     Act { slot: usize, act: u32 },
     Boss { slot: usize, enc: i32 },
     SecondBoss { enc: i32 },
@@ -131,7 +158,7 @@ impl Filter {
         let mut f = Filter { neow: vec![], acts: vec![], reward: vec![], up_front: vec![], maps: vec![] };
         for c in conds {
             match c {
-                Cond::NeowOffer { .. } | Cond::NeowCurse { .. } => f.neow.push(c),
+                Cond::NeowOffer { .. } | Cond::NeowCurse { .. } | Cond::NeowGives { .. } => f.neow.push(c),
                 Cond::Act { .. } => f.acts.push(c),
                 Cond::RewardCard { .. } | Cond::RewardPotion { .. } => f.reward.push(c),
                 Cond::MapCount { .. } => f.maps.push(c),
@@ -152,6 +179,16 @@ impl Filter {
             let ok = self.neow.iter().all(|c| match *c {
                 Cond::NeowOffer { relic } => offers.contains(&relic),
                 Cond::NeowCurse { relic } => offers.last() == Some(&relic),
+                Cond::NeowGives { relic, what, item } => {
+                    offers.contains(&relic) && {
+                        let outcome = gen::neow_outcome(snap, seed, relic);
+                        match what {
+                            Item::Card => outcome.cards.contains(&item),
+                            Item::Relic => outcome.relics.contains(&item),
+                            Item::Potion => outcome.potions.contains(&item),
+                        }
+                    }
+                }
                 _ => true,
             });
             if !ok {

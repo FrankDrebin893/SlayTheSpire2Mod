@@ -20,6 +20,17 @@ public sealed class MapResult
     public int Count(int pointType) => Points.Count(p => p[2] == pointType);
 }
 
+// What one Neow relic hands out when it is taken, assuming it is the first thing to draw from the
+// streams it uses. Empty for relics that roll nothing.
+public sealed class NeowOutcome
+{
+    public int[] Cards = [];
+    public int[] Relics = [];
+    public int[] Potions = [];
+
+    public bool IsEmpty => Cards.Length + Relics.Length + Potions.Length == 0;
+}
+
 // What a seed generates at the start of a run, as ids into the tables of a GameData. Produced by
 // the Rust engine (FromJson) and by SeedSimulator, in the same shape so the two can be compared.
 // -1 stands for "none".
@@ -37,6 +48,8 @@ public sealed class SimResult
     public List<RelicDeque> PlayerRelics = [];
     // Two positive options, then the cursed one.
     public int[] Neow = [];
+    // One per offer in Neow; empty when not simulated.
+    public NeowOutcome[] NeowOutcomes = [];
     public int Gold;
     public int Potion = -1;
     public int[] Cards = [];
@@ -60,6 +73,9 @@ public sealed class SimResult
             SharedRelics = Deques(r.GetProperty("shared_relics")),
             PlayerRelics = Deques(r.GetProperty("player_relics")),
             Neow = Ints(r.GetProperty("neow")),
+            NeowOutcomes = r.GetProperty("neow_outcomes").EnumerateArray()
+                .Select(o => new NeowOutcome { Cards = Ints(o.GetProperty("cards")), Relics = Ints(o.GetProperty("relics")), Potions = Ints(o.GetProperty("potions")) })
+                .ToArray(),
             Gold = r.GetProperty("gold").GetInt32(),
             Potion = r.GetProperty("potion").GetInt32(),
             Cards = Ints(r.GetProperty("cards")),
@@ -96,6 +112,17 @@ public sealed class SimResult
         WriteDeques(w, "shared_relics", SharedRelics);
         WriteDeques(w, "player_relics", PlayerRelics);
         w.WriteInts("neow", Neow);
+        w.WriteStartArray("neow_outcomes");
+        foreach (NeowOutcome o in NeowOutcomes)
+        {
+            w.WriteStartObject();
+            w.WriteInts("cards", o.Cards);
+            w.WriteInts("relics", o.Relics);
+            w.WriteInts("potions", o.Potions);
+            w.WriteEndObject();
+        }
+
+        w.WriteEndArray();
         w.WriteNumber("gold", Gold);
         w.WriteNumber("potion", Potion);
         w.WriteInts("cards", Cards);
@@ -131,6 +158,7 @@ public sealed class SimResult
             ?? Diff("ancients", a.Ancients, b.Ancients)
             ?? Diff("second boss", [a.SecondBoss], [b.SecondBoss])
             ?? Diff("neow", a.Neow, b.Neow)
+            ?? Diff("neow outcomes", Flatten(a.NeowOutcomes), Flatten(b.NeowOutcomes))
             ?? Diff("first reward", [a.Gold, a.Potion, .. a.Cards], [b.Gold, b.Potion, .. b.Cards])
             ?? DiffMaps(a.Maps, b.Maps);
     }
@@ -155,6 +183,8 @@ public sealed class SimResult
 
         return null;
     }
+
+    private static int[][] Flatten(NeowOutcome[] outcomes) => outcomes.Select(o => (int[]) [.. o.Cards, -1, .. o.Relics, -1, .. o.Potions]).ToArray();
 
     private static int[][] Flatten(List<RelicDeque> deques) => deques.Select(d => (int[]) [d.Rarity, .. d.Relics]).ToArray();
 

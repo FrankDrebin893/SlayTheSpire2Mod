@@ -1,8 +1,8 @@
 //! Start-of-run generation. Mirrors StartRunLobby.BeginRunLocally, RunManager.InitializeNewRun,
-//! RunManager.GenerateRooms, ActModel.GenerateRooms, Neow.GenerateInitialOptions and the first
-//! combat reward (RewardsSet.GenerateRewardsFor for a normal room).
+//! RunManager.GenerateRooms, ActModel.GenerateRooms, Neow.GenerateInitialOptions, AfterObtained of
+//! the Neow relics and the first combat reward (RewardsSet.GenerateRewardsFor for a normal room).
 
-use crate::data::{ActData, CardData, Snapshot};
+use crate::data::{ActData, CardData, GiveKind, Snapshot};
 use crate::rng::{hash, Rng};
 
 pub const NONE: i32 = -1;
@@ -11,6 +11,11 @@ const CARD_RARITY_BASIC: u8 = 1;
 const CARD_RARITY_COMMON: u8 = 2;
 const CARD_RARITY_UNCOMMON: u8 = 3;
 const CARD_RARITY_RARE: u8 = 4;
+const CARD_RARITY_ANCIENT: u8 = 5;
+
+const RELIC_RARITY_COMMON: u32 = 2;
+const RELIC_RARITY_UNCOMMON: u32 = 3;
+const RELIC_RARITY_RARE: u32 = 4;
 
 const POTION_RARITY_COMMON: u32 = 1;
 const POTION_RARITY_UNCOMMON: u32 = 2;
@@ -249,6 +254,75 @@ fn next_rarity_with_wrapping(rarity: u8) -> u8 {
     }
 }
 
+/// How CardFactory.CreateForReward decides the rarity of a card.
+enum Odds<'a> {
+    /// CardRarityOdds.Roll: regular encounter odds plus the pity offset, which it updates.
+    Pity(&'a mut f32),
+    /// CardRarityOdds.RollWithBaseOdds, for every source other than an encounter.
+    Base,
+    /// No roll: any card that is not basic or ancient.
+    Uniform,
+}
+
+/// One card of CardFactory.CreateForReward, without the upgrade roll. `pool` is what
+/// GetPossibleCards returns, `taken` the cards already picked for the same reward.
+fn pick_card(snap: &Snapshot, rng: &mut Rng, pool: &[CardData], taken: &[u32], odds: Odds) -> Option<u32> {
+    let pool: Vec<&CardData> = pool.iter().filter(|c| !taken.contains(&c.id)).collect();
+    let options: Vec<u32> = match odds {
+        Odds::Uniform => pool.iter().filter(|c| c.rarity != CARD_RARITY_BASIC && c.rarity != CARD_RARITY_ANCIENT).map(|c| c.id).collect(),
+        odds => {
+            let roll = rng.next_float();
+            let rare_threshold = match &odds {
+                Odds::Pity(offset) => snap.rare_odds + **offset,
+                _ => snap.rare_odds,
+            };
+            let mut rarity = if roll < rare_threshold {
+                CARD_RARITY_RARE
+            } else if roll < snap.uncommon_odds + rare_threshold {
+                CARD_RARITY_UNCOMMON
+            } else {
+                CARD_RARITY_COMMON
+            };
+            if let Odds::Pity(offset) = odds {
+                *offset = if rarity == CARD_RARITY_RARE { -0.05f32 } else { (*offset + snap.rarity_growth).min(0.4f32) };
+            }
+
+            // GetNextAllowedRarity
+            let first = rarity;
+            while rarity != 0 && !pool.iter().any(|c| c.rarity == rarity) {
+                rarity = next_rarity_with_wrapping(rarity);
+                if rarity == first {
+                    rarity = 0;
+                }
+            }
+            pool.iter().filter(|c| c.rarity == rarity).map(|c| c.id).collect()
+        }
+    };
+    rng.next_item(&options)
+}
+
+/// PotionFactory.CreateRandomPotions
+fn random_potions(snap: &Snapshot, rng: &mut Rng, count: usize) -> Vec<u32> {
+    let mut left: Vec<[u32; 2]> = snap.potions.clone();
+    let mut out = Vec::with_capacity(count);
+    for _ in 0..count {
+        let roll = rng.next_float();
+        let rarity = if roll <= 0.1f32 {
+            POTION_RARITY_RARE
+        } else if roll <= 0.35f32 {
+            POTION_RARITY_UNCOMMON
+        } else {
+            POTION_RARITY_COMMON
+        };
+        let options: Vec<u32> = left.iter().filter(|p| p[1] == rarity).map(|p| p[0]).collect();
+        if let Some(potion) = rng.next_item(&options) {
+            out.push(potion);
+            left.retain(|p| p[0] != potion);
+        }
+    }
+    out
+}
+
 /// The reward of the first normal combat of act 1, assuming nothing drew from the rewards
 /// stream of the player before it.
 pub fn first_reward(snap: &Snapshot, seed: u64, first_encounter: Option<u32>) -> Reward {
@@ -268,50 +342,16 @@ pub fn first_reward(snap: &Snapshot, seed: u64, first_encounter: Option<u32>) ->
         None => rng.next_int_range(0, 1),
     };
 
-    // PotionFactory.CreateRandomPotions
     let mut potion = NONE;
     if potion_dropped {
-        let roll = rng.next_float();
-        let rarity = if roll <= 0.1f32 {
-            POTION_RARITY_RARE
-        } else if roll <= 0.35f32 {
-            POTION_RARITY_UNCOMMON
-        } else {
-            POTION_RARITY_COMMON
-        };
-        let options: Vec<u32> = snap.potions.iter().filter(|p| p[1] == rarity).map(|p| p[0]).collect();
-        potion = rng.next_item(&options).map_or(NONE, |p| p as i32);
+        potion = random_potions(snap, &mut rng, 1).first().map_or(NONE, |&p| p as i32);
     }
 
     // CardFactory.CreateForReward, three cards
     let mut offset = -0.05f32;
     let mut cards: Vec<u32> = Vec::with_capacity(3);
     for _ in 0..3 {
-        let pool: Vec<&CardData> = snap.cards.iter().filter(|c| !cards.contains(&c.id)).collect();
-
-        // CardRarityOdds.Roll(RegularEncounter)
-        let roll = rng.next_float();
-        let rare_threshold = snap.rare_odds + offset;
-        let mut rarity = if roll < rare_threshold {
-            CARD_RARITY_RARE
-        } else if roll < snap.uncommon_odds + rare_threshold {
-            CARD_RARITY_UNCOMMON
-        } else {
-            CARD_RARITY_COMMON
-        };
-        offset = if rarity == CARD_RARITY_RARE { -0.05f32 } else { (offset + snap.rarity_growth).min(0.4f32) };
-
-        // GetNextAllowedRarity
-        let first = rarity;
-        while rarity != 0 && !pool.iter().any(|c| c.rarity == rarity) {
-            rarity = next_rarity_with_wrapping(rarity);
-            if rarity == first {
-                rarity = 0;
-            }
-        }
-
-        let options: Vec<u32> = pool.iter().filter(|c| c.rarity == rarity).map(|c| c.id).collect();
-        if let Some(card) = rng.next_item(&options) {
+        if let Some(card) = pick_card(snap, &mut rng, &snap.cards, &cards, Odds::Pity(&mut offset)) {
             cards.push(card);
         }
         // RollForUpgrade: the chance is 0 in act 1, but the roll is still consumed.
@@ -319,4 +359,149 @@ pub fn first_reward(snap: &Snapshot, seed: u64, first_encounter: Option<u32>) ->
     }
 
     Reward { gold, potion, cards }
+}
+
+/// What a Neow relic hands out when it is obtained.
+#[derive(Default)]
+pub struct Outcome {
+    pub cards: Vec<u32>,
+    pub relics: Vec<u32>,
+    pub potions: Vec<u32>,
+}
+
+/// CreateForReward with base odds and the upgrade roll, as relics and events use it.
+fn reward_cards(snap: &Snapshot, rng: &mut Rng, pool: &[CardData], count: usize) -> Vec<u32> {
+    let mut cards = Vec::with_capacity(count);
+    for _ in 0..count {
+        if let Some(card) = pick_card(snap, rng, pool, &cards, Odds::Base) {
+            cards.push(card);
+        }
+        rng.next_float();
+    }
+    cards
+}
+
+fn with_rarity(pool: &[CardData], rarity: u8) -> Vec<CardData> {
+    pool.iter().copied().filter(|c| c.rarity == rarity).collect()
+}
+
+/// RelicFactory.PullNextRelicFromFront(player): a rarity roll, then the first allowed relic of
+/// that rarity in the player's bag, moving on to the next rarity when there is none.
+fn pull_relic(rng: &mut Rng, bag: &mut [RelicDeque], disallowed: &[u32]) -> Option<u32> {
+    let roll = rng.next_float();
+    let mut rarity = if roll < 0.5f32 {
+        RELIC_RARITY_COMMON
+    } else if roll < 0.83f32 {
+        RELIC_RARITY_UNCOMMON
+    } else {
+        RELIC_RARITY_RARE
+    };
+    loop {
+        if let Some(deque) = bag.iter_mut().find(|d| d.rarity == rarity) {
+            if let Some(i) = deque.relics.iter().position(|r| !disallowed.contains(r)) {
+                return Some(deque.relics.remove(i));
+            }
+        }
+        rarity = match rarity {
+            RELIC_RARITY_COMMON => RELIC_RARITY_UNCOMMON,
+            RELIC_RARITY_UNCOMMON => RELIC_RARITY_RARE,
+            _ => return None,
+        };
+    }
+}
+
+/// CardFactory.CreateRandomCardForTransform for a basic card of the character: any common,
+/// uncommon or rare card of the pool.
+fn transform(snap: &Snapshot, rng: &mut Rng) -> Option<u32> {
+    let options: Vec<u32> = snap
+        .cards
+        .iter()
+        .filter(|c| (CARD_RARITY_COMMON..=CARD_RARITY_RARE).contains(&c.rarity))
+        .map(|c| c.id)
+        .collect();
+    rng.next_item(&options)
+}
+
+/// AfterObtained of the Neow relics that roll something, each as the first thing to draw from
+/// its streams. Relics without a roll give an empty outcome.
+pub fn neow_outcome(snap: &Snapshot, seed: u64, relic: u32) -> Outcome {
+    let mut out = Outcome::default();
+    let Some(neow) = &snap.neow else { return out };
+    let Some(give) = neow.gives.iter().find(|g| g.relic == relic) else { return out };
+    let mut rewards = Rng::named(seed, "rewards");
+
+    match give.kind {
+        GiveKind::ArcaneScroll | GiveKind::HeftyTablet => {
+            let rares = with_rarity(&snap.cards, CARD_RARITY_RARE);
+            for _ in 0..give.count {
+                if let Some(card) = pick_card(snap, &mut rewards, &rares, &out.cards, Odds::Uniform) {
+                    out.cards.push(card);
+                }
+            }
+        }
+        GiveKind::LeadPaperweight => out.cards = reward_cards(snap, &mut rewards, &neow.colorless, give.count),
+        GiveKind::LostCoffer => {
+            out.cards = reward_cards(snap, &mut rewards, &snap.cards, give.count);
+            out.potions = random_potions(snap, &mut rewards, 1);
+        }
+        GiveKind::ScrollBoxes => {
+            // ScrollBoxes.GenerateRandomBundles
+            let commons = with_rarity(&snap.cards, CARD_RARITY_COMMON);
+            let uncommons = with_rarity(&snap.cards, CARD_RARITY_UNCOMMON);
+            let mut used: Vec<u32> = Vec::new();
+            for _ in 0..give.count {
+                if let Some(claw) = neow.claw {
+                    if rewards.next_int(100) < 1 {
+                        out.cards.extend([claw; 3]);
+                        continue;
+                    }
+                }
+                for pool in [&commons, &commons, &uncommons] {
+                    let options: Vec<u32> = pool.iter().map(|c| c.id).filter(|c| !used.contains(c)).collect();
+                    if let Some(card) = rewards.next_item(&options) {
+                        out.cards.push(card);
+                        used.push(card);
+                    }
+                }
+            }
+        }
+        GiveKind::SmallCapsule | GiveKind::LargeCapsule => {
+            let mut up_front = Rng::named(seed, "up_front");
+            populate_bag(&snap.shared_bag, &mut up_front);
+            let mut bag = populate_bag(&snap.player_bag, &mut up_front);
+            for _ in 0..give.count {
+                if let Some(r) = pull_relic(&mut rewards, &mut bag, &neow.bag_disallowed) {
+                    out.relics.push(r);
+                }
+            }
+        }
+        GiveKind::NeowsBones => {
+            let mut relics = neow.bones.clone();
+            rewards.shuffle(&mut relics);
+            relics.truncate(give.count);
+            out.relics = relics;
+            out.cards.extend(Rng::named(seed, "niche").next_item(&neow.curses));
+        }
+        GiveKind::Kaleidoscope => {
+            let mut niche = Rng::named(seed, "niche");
+            for _ in 0..give.count {
+                let mut pools: Vec<usize> = (0..neow.other_pools.len()).collect();
+                niche.shuffle(&mut pools);
+                for &pool in pools.iter().take(3) {
+                    out.cards.extend(reward_cards(snap, &mut rewards, &neow.other_pools[pool], 1));
+                }
+            }
+        }
+        GiveKind::PhialHolster => out.potions = random_potions(snap, &mut Rng::named(seed, "combat_potion_generation"), give.count),
+        GiveKind::LeafyPoultice => {
+            // The first Strike, then the first Defend.
+            let mut rng = Rng::named(seed, "transformations");
+            for _ in 0..2 {
+                out.cards.extend(transform(snap, &mut rng));
+            }
+        }
+        GiveKind::NewLeaf => out.cards.extend(transform(snap, &mut Rng::named(seed, "niche"))),
+    }
+
+    out
 }

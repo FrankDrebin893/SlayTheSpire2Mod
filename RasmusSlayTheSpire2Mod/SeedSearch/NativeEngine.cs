@@ -20,7 +20,7 @@ public interface ISeedSearch : IDisposable
 public sealed class NativeEngine : IDisposable
 {
     private const string Lib = "sts2_seed_engine";
-    private const uint ExpectedAbi = 1;
+    private const uint ExpectedAbi = 2;
 
     private static bool? _available;
     private IntPtr _handle;

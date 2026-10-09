@@ -1,0 +1,15 @@
+bin/
+obj/
+.vs/
+.idea/
+*.user
+
+# Decompiled game code (reference only, never commit)
+decompiled/
+
+# Mega Crit ModUploader binaries and its log
+tools/
+mod-uploader.log
+
+# Workshop upload payload is build output; mod_id.txt (the Workshop item id) IS committed
+workshop/*/content/

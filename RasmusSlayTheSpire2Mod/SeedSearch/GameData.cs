@@ -47,6 +47,13 @@ public sealed class IdTable<T> where T : AbstractModel
 
         return id;
     }
+
+    // The id of the model with this ModelId entry, for filters that were saved under other data.
+    public int? Find(string entry)
+    {
+        int id = _items.FindIndex(m => m.Id.Entry == entry);
+        return id < 0 ? null : id;
+    }
 }
 
 public sealed class ActInfo

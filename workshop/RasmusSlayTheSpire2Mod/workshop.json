@@ -1,8 +1,8 @@
 {
-  "title": "Rasmus' Slay the Spire 2 Mod",
-  "description": "Card tweaks.\n\nMaster Planner costs 1 less energy: 1 instead of 2, and 0 when upgraded.\n\nChanges gameplay, so everyone in a multiplayer lobby needs the mod. Built for game version 0.111.0. No dependencies.",
-  "visibility": "private",
-  "changeNote": "Initial release.",
+  "title": "Rasmus' Seed Search & Tweaks",
+  "description": "[h2]Find the seed you want, before you start the run.[/h2]\nAdds a [b]Search Seed[/b] button to the Custom Run screen (singleplayer). It opens a full screen where you pick what you want from the game's own icons, and the mod searches millions of seeds per second for it.\n\n[h3]Filter by[/h3]\n[list]\n[*]Neow's offers, and what they give when you take them\n[*]Which act you get, and its boss and ancient\n[*]The order of events, fights and elites\n[*]The order relics come in\n[*]Elites, rests, shops and unknowns on the map\n[*]The first card reward and potion\n[/list]\n\n[h3]Preview any seed[/h3]\nNeow's three offers and their outcomes, the first fight reward, every act's boss, ancient, events and fights, the relic bags, and the act maps.\n\n[h3]Keep what you find[/h3]\nBookmark seeds with a note, and come back to recent or kept searches. One click puts a seed into the Custom Run screen.\n\n[h3]Card tweak[/h3]\nMaster Planner costs 1 less energy: 1, and 0 when upgraded.\n\n[h3]Good to know[/h3]\n[list]\n[*]Changes gameplay, so everyone in a multiplayer lobby needs the mod.\n[*]The fast search is Windows only; other platforms use a slower search.\n[*]Built for game version 0.111.0. A game update can break it until the mod is updated.\n[*]No dependencies.\n[/list]\n\nUnofficial fan-made mod, not affiliated with Mega Crit.",
+  "visibility": "friends_only",
+  "changeNote": "v1.3.0: seed search on the Custom Run screen, with bookmarks and saved searches.",
   "tags": [],
   "dependencies": [],
   "contentDescriptors": []

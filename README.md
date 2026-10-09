@@ -6,7 +6,7 @@ Built against game version 0.111.0.
 
 - `RasmusSlayTheSpire2Mod/` – general mod for card tweaks. Code-only (Harmony), no BaseLib, no `.pck`.
   - Master Planner costs 1 energy instead of 2 (0 upgraded).
-  - Seed search: a Search Seed button on the Custom Run screen (singleplayer) opens a screen that finds seeds by Neow offers, acts, bosses, ancients, event and fight order, relic order, map contents and the first fight reward, and previews any seed. The search runs in `seed-engine/`, a Rust reimplementation of the game's start-of-run generation (Windows x64; other platforms fall back to a slow search using the game's own code). The mod checks the engine against the game each time and falls back if they disagree.
+  - Seed search: a Search Seed button on the Custom Run screen (singleplayer) opens a screen that finds seeds by Neow offers, acts, bosses, ancients, event and fight order, relic order, map contents and the first fight reward, and previews any seed. Seeds can be bookmarked with a note, and searches are remembered (the last 12, plus any you keep) in `%APPDATA%/SlayTheSpire2/RasmusSlayTheSpire2Mod/seed_search.json`. The search runs in `seed-engine/`, a Rust reimplementation of the game's start-of-run generation (Windows x64; other platforms fall back to a slow search using the game's own code). The mod checks the engine against the game each time and falls back if they disagree.
 
 ## Build and test
 

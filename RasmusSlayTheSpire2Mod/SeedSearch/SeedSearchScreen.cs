@@ -20,6 +20,7 @@ namespace RasmusSlayTheSpire2Mod.SeedSearch;
 public sealed class SeedSearchScreen
 {
     private const int MaxResults = 100;
+    private const int ResultsList = 0, BookmarksList = 1;
 
     private static readonly FieldInfo SeedInputField = AccessTools.Field(typeof(NCustomRunScreen), "_seedInput");
     private static readonly string[] GameButtonFields = ["_backButton", "_confirmButton", "_randomizeButton"];
@@ -41,13 +42,20 @@ public sealed class SeedSearchScreen
     private readonly PreviewPanel _preview;
     private readonly Button _searchButton = new();
     private readonly Label _status = new();
+    private readonly Choice _listChoice = new([(ResultsList, "Results"), (BookmarksList, "Bookmarks")]);
     private readonly ItemList _results = new();
+    private readonly ScrollContainer _bookmarkScroll = new() { HorizontalScrollMode = ScrollContainer.ScrollMode.Disabled };
+    private readonly VBoxContainer _bookmarks = new() { SizeFlagsHorizontal = Control.SizeFlags.ExpandFill };
     private readonly LineEdit _seedBox = new();
     private readonly Button _useButton = new();
+    private readonly Button _bookmarkButton = new();
+    private readonly HBoxContainer _noteRow = new();
+    private readonly LineEdit _noteBox = new();
     private readonly Timer _pollTimer = new();
 
     private ISeedSearch? _search;
     private SimResult? _shown;
+    private readonly List<(Button Row, string Seed)> _bookmarkRows = [];
 
     private GameData Data => _engine.Data;
 
@@ -84,6 +92,8 @@ public sealed class SeedSearchScreen
         _root.MouseFilter = Control.MouseFilterEnum.Stop;
         _root.Theme = Visuals.MakeTheme(_screen.GetNodeOrNull<Control>("%SeedLabel")?.GetThemeFont("font"));
         _root.TreeExiting += StopSearch;
+        SavedData.BookmarksChanged += RefreshBookmarks;
+        _root.TreeExiting += () => SavedData.BookmarksChanged -= RefreshBookmarks;
 
         ColorRect background = new() { Color = Visuals.Background, MouseFilter = Control.MouseFilterEnum.Ignore };
         background.SetAnchorsAndOffsetsPreset(Control.LayoutPreset.FullRect);
@@ -109,7 +119,7 @@ public sealed class SeedSearchScreen
         VBoxContainer left = new();
         left.AddThemeConstantOverride("separation", 12);
         body.AddChild(left);
-        FilterPanel filters = new(Data, Conds, _info.Show);
+        FilterPanel filters = new(Data, Conds, _info.Show, text => _status.Text = text);
         filters.Root.SizeFlagsVertical = Control.SizeFlags.ExpandFill;
         left.AddChild(filters.Root);
         left.AddChild(_info.Root);
@@ -122,6 +132,7 @@ public sealed class SeedSearchScreen
         _layer.AddChild(_root);
         _screen.AddChild(_layer);
         DisableGameButtons();
+        RefreshBookmarks();
         ShowSeed(_gameSeedInput.Text);
     }
 
@@ -191,12 +202,22 @@ public sealed class SeedSearchScreen
         split.AddThemeConstantOverride("separation", 14);
         column.AddChild(split);
 
-        VBoxContainer left = new() { CustomMinimumSize = new Vector2(200, 0) };
+        VBoxContainer left = new() { CustomMinimumSize = new Vector2(240, 0) };
         split.AddChild(left);
-        left.AddChild(Visuals.MutedLabel("Matching seeds"));
+        left.AddChild(_listChoice.Root);
+        _listChoice.Changed += () =>
+        {
+            _results.Visible = _listChoice.Value == ResultsList;
+            _bookmarkScroll.Visible = _listChoice.Value == BookmarksList;
+        };
         _results.SizeFlagsVertical = Control.SizeFlags.ExpandFill;
         _results.ItemSelected += index => ShowSeed(_results.GetItemText((int)index), fromList: true);
         left.AddChild(_results);
+        _bookmarkScroll.SizeFlagsVertical = Control.SizeFlags.ExpandFill;
+        _bookmarkScroll.Visible = false;
+        _bookmarks.AddThemeConstantOverride("separation", 4);
+        _bookmarkScroll.AddChild(_bookmarks);
+        left.AddChild(_bookmarkScroll);
 
         VBoxContainer right = new() { SizeFlagsHorizontal = Control.SizeFlags.ExpandFill };
         right.AddThemeConstantOverride("separation", 8);
@@ -213,6 +234,26 @@ public sealed class SeedSearchScreen
         _useButton.Text = "Use this seed";
         _useButton.Pressed += UseSeed;
         seedRow.AddChild(_useButton);
+        _bookmarkButton.CustomMinimumSize = new Vector2(200, 0);
+        _bookmarkButton.Pressed += () =>
+        {
+            if (_shown != null)
+                SavedData.ToggleBookmark(_shown.Seed, Data);
+        };
+        seedRow.AddChild(_bookmarkButton);
+
+        // Only there while the previewed seed is bookmarked.
+        _noteRow.AddThemeConstantOverride("separation", 10);
+        right.AddChild(_noteRow);
+        _noteRow.AddChild(new Label { Text = "Note" });
+        _noteBox.PlaceholderText = "why this seed is worth keeping";
+        _noteBox.SizeFlagsHorizontal = Control.SizeFlags.ExpandFill;
+        _noteBox.TextChanged += text =>
+        {
+            if (ShownBookmark() is { } bookmark)
+                SavedData.SetNote(bookmark, text.Trim());
+        };
+        _noteRow.AddChild(_noteBox);
         _preview.Root.SizeFlagsVertical = Control.SizeFlags.ExpandFill;
         right.AddChild(_preview.Root);
         return panel;
@@ -245,7 +286,9 @@ public sealed class SeedSearchScreen
             return;
         }
 
+        SavedData.RecordSearch(Data, Conds);
         _results.Clear();
+        _listChoice.Select(ResultsList);
         _searchButton.Text = "Stop";
         _pollTimer.Start();
     }
@@ -309,7 +352,61 @@ public sealed class SeedSearchScreen
 
         _shown = seed.Length == 0 ? null : _engine.Simulate(seed);
         _useButton.Disabled = _shown == null;
+        ShowBookmarkState();
         _preview.Show(_shown, seed.Length == 0 ? "Pick a seed from the list, or type one above to preview it." : "Could not preview this seed. See godot.log.");
+    }
+
+    // ---- bookmarks ----
+
+    private Bookmark? ShownBookmark() => _shown == null ? null : SavedData.FindBookmark(_shown.Seed, Data);
+
+    // Rows of buttons rather than an ItemList, which cannot show a second line under the seed.
+    private void RefreshBookmarks()
+    {
+        Visuals.Clear(_bookmarks);
+        _bookmarkRows.Clear();
+        if (SavedData.Bookmarks.Count == 0)
+        {
+            Label empty = Visuals.MutedLabel("No bookmarks yet. Preview a seed and press Bookmark.");
+            empty.CustomMinimumSize = new Vector2(220, 0);
+            _bookmarks.AddChild(empty);
+        }
+
+        StyleBoxFlat plain = Visuals.Box(Visuals.InsetColor, Visuals.Plain, 8);
+        foreach (Bookmark b in SavedData.Bookmarks)
+        {
+            // A bookmark made under another character or ascension still previews, as this setup.
+            string detail = string.Join("  ·  ", new[] { b.IsFor(Data) ? "" : b.Setup, b.Note }.Where(part => part.Length > 0));
+            Button row = new()
+            {
+                Text = detail.Length > 0 ? b.Seed + "\n" + detail : b.Seed,
+                TooltipText = $"{b.Setup}, saved {b.Saved.ToLocalTime():d}" + (b.Note.Length > 0 ? "\n" + b.Note : ""),
+                Alignment = HorizontalAlignment.Left,
+                ClipText = true,
+                ToggleMode = true,
+                FocusMode = Control.FocusModeEnum.None
+            };
+            row.AddThemeFontSizeOverride("font_size", 16);
+            row.AddThemeStyleboxOverride("normal", plain);
+            row.Pressed += () => ShowSeed(b.Seed, fromList: true);
+            _bookmarks.AddChild(row);
+            _bookmarkRows.Add((row, b.Seed));
+        }
+
+        ShowBookmarkState();
+    }
+
+    private void ShowBookmarkState()
+    {
+        Bookmark? bookmark = ShownBookmark();
+        _bookmarkButton.Disabled = _shown == null;
+        _bookmarkButton.Text = bookmark == null ? "Bookmark" : "Remove bookmark";
+        _noteRow.Visible = bookmark != null;
+        foreach ((Button row, string seed) in _bookmarkRows)
+            row.SetPressedNoSignal(seed == _shown?.Seed);
+        // Typing a note saves it, which leads back here; the box already has that text.
+        if (bookmark != null && _noteBox.Text.Trim() != bookmark.Note)
+            _noteBox.Text = bookmark.Note;
     }
 
     // ---- leaving ----

@@ -343,6 +343,46 @@ public static class Visuals
     private static Texture2D? RoomIcon(MapPointType point, RoomType room, ModelId? id) => Load(ImageHelper.GetRoomIconPath(point, room, id));
 }
 
+// A row of buttons of which exactly one is down.
+public sealed class Choice
+{
+    private readonly ButtonGroup _group = new();
+    private readonly Dictionary<int, Button> _buttons = new();
+
+    public HBoxContainer Root { get; } = new();
+
+    public int Value { get; private set; }
+
+    public event Action? Changed;
+
+    public Choice(IEnumerable<(int Id, string Text)> options)
+    {
+        Root.AddThemeConstantOverride("separation", 4);
+        foreach ((int id, string text) in options)
+        {
+            Button button = new() { Text = text, ToggleMode = true, ButtonGroup = _group, FocusMode = Control.FocusModeEnum.None };
+            if (Root.GetChildCount() == 0)
+            {
+                Value = id;
+                button.ButtonPressed = true;
+            }
+
+            button.Toggled += on =>
+            {
+                if (on && Value != id)
+                {
+                    Value = id;
+                    Changed?.Invoke();
+                }
+            };
+            _buttons[id] = button;
+            Root.AddChild(button);
+        }
+    }
+
+    public void Select(int id) => _buttons[id].ButtonPressed = true;
+}
+
 // The strip that explains whatever tile the mouse is over: larger art, name and the game's text.
 public sealed class InfoPanel
 {

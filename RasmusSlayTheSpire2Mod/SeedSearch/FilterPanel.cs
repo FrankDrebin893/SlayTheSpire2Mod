@@ -10,6 +10,7 @@ public sealed class FilterPanel
     private readonly GameData _data;
     private readonly List<Cond> _conds;
     private readonly Action<Visual> _hover;
+    private readonly Action<string> _notify;
     private readonly HFlowContainer _chips = Visuals.Flow();
     private readonly HFlowContainer _tabBar = Visuals.Flow();
     private readonly PanelContainer _tabHost = Visuals.Panel(Visuals.InsetColor, 10);
@@ -17,18 +18,27 @@ public sealed class FilterPanel
 
     public PanelContainer Root { get; } = Visuals.Panel(Visuals.PanelColor);
 
-    public FilterPanel(GameData data, List<Cond> conds, Action<Visual> hover)
+    // notify shows one line of feedback, for things that happen away from where the player looks.
+    public FilterPanel(GameData data, List<Cond> conds, Action<Visual> hover, Action<string> notify)
     {
         _data = data;
         _conds = conds;
         _hover = hover;
+        _notify = notify;
         Root.CustomMinimumSize = new Vector2(760, 0);
 
         VBoxContainer column = new();
         column.AddThemeConstantOverride("separation", 10);
         Root.AddChild(column);
 
-        column.AddChild(Visuals.SectionTitle("Filters"));
+        HBoxContainer title = new();
+        Label heading = Visuals.SectionTitle("Filters");
+        heading.SizeFlagsHorizontal = Control.SizeFlags.ExpandFill;
+        title.AddChild(heading);
+        Button save = new() { Text = "Save search", TooltipText = "Keep these filters under the Saved tab", FocusMode = Control.FocusModeEnum.None };
+        save.Pressed += SaveSearch;
+        title.AddChild(save);
+        column.AddChild(title);
         ScrollContainer chipScroll = new() { CustomMinimumSize = new Vector2(0, 92), HorizontalScrollMode = ScrollContainer.ScrollMode.Disabled };
         chipScroll.AddChild(_chips);
         PanelContainer active = Visuals.Panel(Visuals.InsetColor, 8);
@@ -47,6 +57,7 @@ public sealed class FilterPanel
         AddTab(Visuals.Named("Relics", Visuals.Load("res://images/ui/run_history/treasure.png")), RelicTab);
         AddTab(Visuals.Named("Map", Visuals.Load("res://images/ui/run_history/rest_site.png")), MapTab);
         AddTab(Visuals.Named("First reward", Visuals.Load("res://images/ui/run_history/shop.png")), RewardTab);
+        AddTab(Visuals.Named("Saved"), SavedTab);
         RefreshChips();
     }
 
@@ -82,6 +93,29 @@ public sealed class FilterPanel
             _conds.Add(cond);
             RefreshChips();
         }
+    }
+
+    private void SaveSearch()
+    {
+        if (_conds.Count == 0)
+        {
+            _notify("Add at least one filter first.");
+            return;
+        }
+
+        SavedData.RecordSearch(_data, _conds, keep: true);
+        _notify("Search saved. It is under the Saved tab.");
+    }
+
+    private void Load(SavedSearch search)
+    {
+        (List<Cond> conds, int dropped) = CondCodec.Read(search.CondsJson, _data);
+        _conds.Clear();
+        _conds.AddRange(conds);
+        RefreshChips();
+        _notify(dropped == 0
+            ? "Filters loaded."
+            : $"Loaded. {dropped} filter{(dropped == 1 ? "" : "s")} left out: not available in this setup.");
     }
 
     private Visual VisualOf(Cond cond) => cond switch
@@ -283,6 +317,64 @@ public sealed class FilterPanel
             () => grid.Selected is { } c ? new RewardCardCond(c) : null);
     }
 
+    // Every search that was run, most recent first, below the ones the player chose to keep.
+    private Control SavedTab()
+    {
+        VBoxContainer tab = new() { Visible = false };
+        tab.AddThemeConstantOverride("separation", 8);
+        tab.AddChild(Visuals.MutedLabel($"The last {SavedData.MaxRecent} searches you ran are remembered here. Keep one to hold on to it for good."));
+        ScrollContainer scroll = new() { SizeFlagsVertical = Control.SizeFlags.ExpandFill, HorizontalScrollMode = ScrollContainer.ScrollMode.Disabled };
+        VBoxContainer rows = new() { SizeFlagsHorizontal = Control.SizeFlags.ExpandFill };
+        rows.AddThemeConstantOverride("separation", 6);
+        scroll.AddChild(rows);
+        tab.AddChild(scroll);
+
+        void Refill()
+        {
+            Visuals.Clear(rows);
+            if (SavedData.Searches.Count == 0)
+                rows.AddChild(Visuals.MutedLabel("Nothing yet. Run a search, or press Save search above."));
+            foreach (SavedSearch search in SavedData.Searches.OrderByDescending(s => s.Kept))
+                rows.AddChild(SavedRow(search));
+        }
+
+        SavedData.SearchesChanged += Refill;
+        tab.TreeExiting += () => SavedData.SearchesChanged -= Refill;
+        Refill();
+        return tab;
+    }
+
+    private Control SavedRow(SavedSearch search)
+    {
+        PanelContainer panel = Visuals.Panel(Visuals.PanelColor, 8);
+        HBoxContainer row = new();
+        row.AddThemeConstantOverride("separation", 8);
+        panel.AddChild(row);
+
+        // Wrapping labels need a width to start from, or they grow tall instead of wide.
+        VBoxContainer text = new() { SizeFlagsHorizontal = Control.SizeFlags.ExpandFill, CustomMinimumSize = new Vector2(360, 0) };
+        text.AddChild(Visuals.MutedLabel($"{search.Setup}  ·  {search.Used.ToLocalTime():g}", 14));
+        Label filters = new() { Text = string.Join("\n", CondCodec.Texts(search.CondsJson)), AutowrapMode = TextServer.AutowrapMode.WordSmart };
+        filters.AddThemeFontSizeOverride("font_size", 16);
+        text.AddChild(filters);
+        row.AddChild(text);
+
+        Button load = new() { Text = "Load", TooltipText = "Replace the filters above with these" };
+        load.Pressed += () => Load(search);
+        Button keep = new() { Text = "Keep", ToggleMode = true, ButtonPressed = search.Kept, TooltipText = "Kept searches are never forgotten" };
+        keep.Toggled += on => SavedData.SetKept(search, on);
+        Button remove = new() { Text = "✕", TooltipText = "Forget this search" };
+        remove.Pressed += () => SavedData.RemoveSearch(search);
+        foreach (Button button in new[] { load, keep, remove })
+        {
+            button.FocusMode = Control.FocusModeEnum.None;
+            button.SizeFlagsVertical = Control.SizeFlags.ShrinkCenter;
+            row.AddChild(button);
+        }
+
+        return panel;
+    }
+
     // A hint, a row of options, the grids, and a bottom row ending in the Add button.
     private Control Tab(string hint, Control[] options, Control[] body, Control[] trailing, Func<Cond?> make)
     {
@@ -315,42 +407,6 @@ public sealed class FilterPanel
 
     private IEnumerable<int> SlotItems(int slot, Func<ActInfo, IEnumerable<int>> pick) =>
         _data.SlotActs[slot].SelectMany(a => pick(_data.ActInfos[a])).Distinct();
-
-    // A row of buttons of which exactly one is down.
-    private sealed class Choice
-    {
-        private readonly ButtonGroup _group = new();
-
-        public HBoxContainer Root { get; } = new();
-
-        public int Value { get; private set; }
-
-        public event Action? Changed;
-
-        public Choice(IEnumerable<(int Id, string Text)> options)
-        {
-            Root.AddThemeConstantOverride("separation", 4);
-            foreach ((int id, string text) in options)
-            {
-                Button button = new() { Text = text, ToggleMode = true, ButtonGroup = _group, FocusMode = Control.FocusModeEnum.None };
-                if (Root.GetChildCount() == 0)
-                {
-                    Value = id;
-                    button.ButtonPressed = true;
-                }
-
-                button.Toggled += on =>
-                {
-                    if (on && Value != id)
-                    {
-                        Value = id;
-                        Changed?.Invoke();
-                    }
-                };
-                Root.AddChild(button);
-            }
-        }
-    }
 
     // A scrolling grid of tiles of which one can be picked, with a box that narrows long lists.
     private sealed class IconGrid

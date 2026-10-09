@@ -1,0 +1,28 @@
+Copyright (c) 2026 Rasmus Hoejte. All rights reserved.
+
+This repository and its contents (source code, configuration, documentation
+and images, except as noted below) are the property of the copyright holder.
+
+No permission is granted to copy, modify, merge, publish, distribute,
+sublicense or sell this work, or any part of it, without the prior written
+permission of the copyright holder.
+
+You may install and use the compiled mod for personal, non-commercial play of
+Slay the Spire 2 when you obtain it from the copyright holder's official
+distribution channels, such as its Steam Workshop page.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+COPYRIGHT HOLDER BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY ARISING
+FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR ITS USE.
+
+Third-party material
+
+Slay the Spire 2 and all related names, code and assets are the property of
+Mega Crit. This is an unofficial fan-made mod and is not affiliated with or
+endorsed by Mega Crit. This repository contains no game code or assets.
+
+RasmusSlayTheSpire2Mod/Sts2PathDiscovery.props comes from the
+Alchyr/ModTemplate-StS2 project template and remains subject to that
+project's terms.

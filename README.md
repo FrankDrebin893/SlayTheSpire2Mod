@@ -28,6 +28,10 @@ Uses Mega Crit's [ModUploader](https://github.com/megacrit/sts2-mod-uploader/rel
 
 The first upload writes `mod_id.txt` into the workspace; later uploads update that same item.
 
+## License
+
+Copyright (c) 2026 Rasmus Hoejte. All rights reserved; see [LICENSE](LICENSE). Unofficial fan-made mod, not affiliated with Mega Crit.
+
 ## Reading game code
 
 ```

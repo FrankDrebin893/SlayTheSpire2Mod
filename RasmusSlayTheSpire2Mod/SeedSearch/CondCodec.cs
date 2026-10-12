@@ -75,12 +75,14 @@ public static class CondCodec
                 w.WriteString("kind", "neow_gives");
                 w.WriteString("relic", d.Relics[c.Relic].Id.Entry);
                 w.WriteString("what", c.What.ToString());
-                w.WriteString("item", c.What switch
-                {
-                    GiveItem.Card => d.Cards[c.Item].Id.Entry,
-                    GiveItem.Relic => d.Relics[c.Item].Id.Entry,
-                    _ => d.Potions[c.Item].Id.Entry
-                });
+                w.WriteString("item", ItemEntry(d, c.What, c.Item));
+                break;
+            case NeowNestedCond c:
+                w.WriteString("kind", "neow_nested");
+                w.WriteString("relic", d.Relics[c.Relic].Id.Entry);
+                w.WriteString("via", d.Relics[c.Via].Id.Entry);
+                w.WriteString("what", c.What.ToString());
+                w.WriteString("item", ItemEntry(d, c.What, c.Item));
                 break;
             case ActCond c:
                 w.WriteString("kind", "act");
@@ -139,6 +141,13 @@ public static class CondCodec
         }
     }
 
+    private static string ItemEntry(GameData d, GiveItem what, int item) => what switch
+    {
+        GiveItem.Card => d.Cards[item].Id.Entry,
+        GiveItem.Relic => d.Relics[item].Id.Entry,
+        _ => d.Potions[item].Id.Entry
+    };
+
     private static Cond? ReadOne(JsonElement e, GameData d)
     {
         string Str(string name) => e.GetProperty(name).GetString() ?? "";
@@ -147,6 +156,13 @@ public static class CondCodec
         int? Encounter() => d.Encounters.Find(Str("enc"));
         // A relic Neow can offer here.
         int? Offer() => d.Relics.Find(Str("relic")) is { } r && d.NeowRelics.Contains(r) ? r : null;
+
+        int? Item(GiveItem what) => what switch
+        {
+            GiveItem.Card => d.Cards.Find(Str("item")),
+            GiveItem.Relic => d.Relics.Find(Str("item")),
+            _ => d.Potions.Find(Str("item"))
+        };
 
         string kind = Str("kind");
         switch (kind)
@@ -157,13 +173,15 @@ public static class CondCodec
             {
                 if (Offer() is not { } relic || !Enum.TryParse(Str("what"), true, out GiveItem what))
                     return null;
-                int? item = what switch
-                {
-                    GiveItem.Card => d.Cards.Find(Str("item")),
-                    GiveItem.Relic => d.Relics.Find(Str("item")),
-                    _ => d.Potions.Find(Str("item"))
-                };
-                return item is { } i ? new NeowGivesCond(relic, what, i) : null;
+                return Item(what) is { } i && d.NeowGiveItems(relic, what).Contains(i) ? new NeowGivesCond(relic, what, i) : null;
+            }
+            case "neow_nested":
+            {
+                if (Offer() is not { } relic || d.Relics.Find(Str("via")) is not { } via || !Enum.TryParse(Str("what"), true, out GiveItem what))
+                    return null;
+                return d.NeowGiveItems(relic, GiveItem.Relic).Contains(via) && Item(what) is { } i && d.NeowGiveItems(via, what).Contains(i)
+                    ? new NeowNestedCond(relic, via, what, i)
+                    : null;
             }
             case "act":
                 return Slot() is { } actSlot && d.Acts.Find(Str("act")) is { } act && d.SlotActs[actSlot].Contains(act) ? new ActCond(actSlot, act) : null;
@@ -176,11 +194,13 @@ public static class CondCodec
             case "event":
                 return Slot() is { } eventSlot && d.Events.Find(Str("event")) is { } ev ? new EventCond(eventSlot, ev, Int("within")) : null;
             case "elite" or "normal":
-                return Slot() is { } fightSlot && Encounter() is { } fight ? new EncounterCond(fightSlot, kind == "elite", fight, Int("within")) : null;
+                return Slot() is { } fightSlot && Encounter() is { } fight && d.FightOptions(fightSlot, kind == "elite", Int("within")).Contains(fight)
+                    ? new EncounterCond(fightSlot, kind == "elite", fight, Int("within"))
+                    : null;
             case "relic":
             {
                 bool shared = e.GetProperty("shared").GetBoolean();
-                return d.Relics.Find(Str("relic")) is { } r && (shared ? d.SharedBag : d.PlayerBag).Contains(r) ? new RelicCond(shared, r, Int("within")) : null;
+                return d.Relics.Find(Str("relic")) is { } r && (shared ? d.SharedBagDealt : d.PlayerBag).Contains(r) ? new RelicCond(shared, r, Int("within")) : null;
             }
             case "map_count":
             {
@@ -190,7 +210,7 @@ public static class CondCodec
                 return index < 0 ? null : new MapCountCond(mapSlot, (int)point, Visuals.MapTypes[index].Name, Int("min"), Int("max"));
             }
             case "reward_card":
-                return d.Cards.Find(Str("card")) is { } card && d.RewardCards.Contains(card) ? new RewardCardCond(card) : null;
+                return d.Cards.Find(Str("card")) is { } card && d.FirstRewardCards.Contains(card) ? new RewardCardCond(card) : null;
             case "reward_potion":
                 return new RewardPotionCond(e.GetProperty("present").GetBoolean());
             default:

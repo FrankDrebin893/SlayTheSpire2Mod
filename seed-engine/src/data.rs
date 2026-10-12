@@ -70,6 +70,9 @@ pub struct NeowData {
     pub claw: Option<u32>,
     /// Relics in the player bag for which IsAllowed is false at the start of a run.
     pub bag_disallowed: Vec<u32>,
+    /// [relic, n]: relics of the player bag that shuffle n cards of the deck on the niche stream
+    /// when they are obtained (War Paint, Whetstone), with n counted in the starter deck.
+    pub bag_shuffles: Vec<[u32; 2]>,
 }
 
 #[derive(Deserialize, Clone, Copy, PartialEq, Eq)]

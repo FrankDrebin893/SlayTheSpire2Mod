@@ -27,8 +27,27 @@ public sealed class NeowOutcome
     public int[] Cards = [];
     public int[] Relics = [];
     public int[] Potions = [];
+    // One per entry of Relics for Neow's Bones, whose relics roll things of their own.
+    public NestedOutcome[] Nested = [];
 
     public bool IsEmpty => Cards.Length + Relics.Length + Potions.Length == 0;
+
+    public int[] Of(GiveItem what) => what switch
+    {
+        GiveItem.Card => Cards,
+        GiveItem.Relic => Relics,
+        _ => Potions
+    };
+
+    public bool SameAs(NeowOutcome o) => Cards.AsSpan().SequenceEqual(o.Cards) && Relics.AsSpan().SequenceEqual(o.Relics) && Potions.AsSpan().SequenceEqual(o.Potions);
+}
+
+// What a relic given by Neow's Bones gives. The player takes the relics of Neow's Bones in either
+// order, and the one taken second carries on from the streams the first one used.
+public sealed class NestedOutcome
+{
+    public NeowOutcome First = new();
+    public NeowOutcome Second = new();
 }
 
 // What a seed generates at the start of a run, as ids into the tables of a GameData. Produced by
@@ -74,7 +93,14 @@ public sealed class SimResult
             PlayerRelics = Deques(r.GetProperty("player_relics")),
             Neow = Ints(r.GetProperty("neow")),
             NeowOutcomes = r.GetProperty("neow_outcomes").EnumerateArray()
-                .Select(o => new NeowOutcome { Cards = Ints(o.GetProperty("cards")), Relics = Ints(o.GetProperty("relics")), Potions = Ints(o.GetProperty("potions")) })
+                .Select(o =>
+                {
+                    NeowOutcome outcome = Given(o);
+                    outcome.Nested = o.GetProperty("nested").EnumerateArray()
+                        .Select(n => new NestedOutcome { First = Given(n.GetProperty("first")), Second = Given(n.GetProperty("second")) })
+                        .ToArray();
+                    return outcome;
+                })
                 .ToArray(),
             Gold = r.GetProperty("gold").GetInt32(),
             Potion = r.GetProperty("potion").GetInt32(),
@@ -116,9 +142,21 @@ public sealed class SimResult
         foreach (NeowOutcome o in NeowOutcomes)
         {
             w.WriteStartObject();
-            w.WriteInts("cards", o.Cards);
-            w.WriteInts("relics", o.Relics);
-            w.WriteInts("potions", o.Potions);
+            WriteGiven(w, o);
+            w.WriteStartArray("nested");
+            foreach (NestedOutcome n in o.Nested)
+            {
+                w.WriteStartObject();
+                w.WriteStartObject("first");
+                WriteGiven(w, n.First);
+                w.WriteEndObject();
+                w.WriteStartObject("second");
+                WriteGiven(w, n.Second);
+                w.WriteEndObject();
+                w.WriteEndObject();
+            }
+
+            w.WriteEndArray();
             w.WriteEndObject();
         }
 
@@ -184,7 +222,20 @@ public sealed class SimResult
         return null;
     }
 
-    private static int[][] Flatten(NeowOutcome[] outcomes) => outcomes.Select(o => (int[]) [.. o.Cards, -1, .. o.Relics, -1, .. o.Potions]).ToArray();
+    private static int[][] Flatten(NeowOutcome[] outcomes) =>
+        outcomes.Select(o => (int[]) [.. Flatten(o), .. o.Nested.SelectMany(n => (int[]) [-2, .. Flatten(n.First), -2, .. Flatten(n.Second)])]).ToArray();
+
+    private static int[] Flatten(NeowOutcome o) => [.. o.Cards, -1, .. o.Relics, -1, .. o.Potions];
+
+    private static NeowOutcome Given(JsonElement o) =>
+        new() { Cards = Ints(o.GetProperty("cards")), Relics = Ints(o.GetProperty("relics")), Potions = Ints(o.GetProperty("potions")) };
+
+    private static void WriteGiven(Utf8JsonWriter w, NeowOutcome o)
+    {
+        w.WriteInts("cards", o.Cards);
+        w.WriteInts("relics", o.Relics);
+        w.WriteInts("potions", o.Potions);
+    }
 
     private static int[][] Flatten(List<RelicDeque> deques) => deques.Select(d => (int[]) [d.Rarity, .. d.Relics]).ToArray();
 

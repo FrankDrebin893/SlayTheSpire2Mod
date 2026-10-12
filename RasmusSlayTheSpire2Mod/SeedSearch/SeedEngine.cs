@@ -126,7 +126,7 @@ public sealed class SeedEngine
                 _tried++;
                 if (result == null)
                     Stop();
-                else if (conds.All(c => c.Matches(result)) && !_results.Contains(result.Seed))
+                else if (Cond.AllMatch(conds, result) && !_results.Contains(result.Seed))
                 {
                     _results.Add(result.Seed);
                     if (_results.Count >= maxResults)

@@ -65,6 +65,8 @@ public sealed class ActInfo
     public int[] Boss = [];
     public int[] Ancients = [];
     public int Rooms;
+    // The act opens with this many weak fights; the regular ones come after them.
+    public int WeakCount;
 }
 
 // Everything start-of-run generation depends on for one character, ascension and act 1 choice,
@@ -100,6 +102,14 @@ public sealed class GameData
     public int[] NeowRelics { get; private set; } = [];
     public int NeowId { get; private set; } = -1;
     public int[] RewardCards { get; private set; } = [];
+    // The cards of the rarities the first card reward can roll.
+    public int[] FirstRewardCards { get; private set; } = [];
+    // The shared bag relics of the rarities that are ever dealt.
+    public int[] SharedBagDealt { get; private set; } = [];
+    // Relics of the player bag that are skipped when one is pulled.
+    public int[] BagDisallowed { get; private set; } = [];
+    // Pairs of Neow relics that are never offered together.
+    public int[][] NeowNeverTogether { get; private set; } = [];
     public int[] PotionOptions { get; private set; } = [];
     public int[] ColorlessCards { get; private set; } = [];
     public int[] OtherCharacterCards { get; private set; } = [];
@@ -179,6 +189,7 @@ public sealed class GameData
             List<RelicModel> shared = ModelDb.RelicPool<SharedRelicPool>().GetUnlockedRelics(unlocks).ToList();
             List<RelicModel> mine = shared.Concat(Character.RelicPool.GetUnlockedRelics(unlocks)).Where(r => BagRarities.Contains(r.Rarity)).ToList();
             SharedBag = WriteBag(w, "shared_bag", shared);
+            SharedBagDealt = SharedBag.Where(r => BagRarities.Contains(Relics[r].Rarity)).ToArray();
             PlayerBag = WriteBag(w, "player_bag", mine);
 
             WriteNeow(w, run, mine);
@@ -187,6 +198,19 @@ public sealed class GameData
                 .Where(c => c.MultiplayerConstraint != CardMultiplayerConstraint.MultiplayerOnly)
                 .ToList();
             RewardCards = WriteCards(w, "cards", cards);
+
+            // CardRarityOdds.Roll: a rare needs a roll under the rare odds plus the pity offset,
+            // which starts below zero and grows with every card that is not rare.
+            CardRarityOdds rarityOdds = player.PlayerOdds.CardRarity;
+            float offset = rarityOdds.CurrentValue;
+            bool rare = false;
+            for (int i = 0; i < 3; i++)
+            {
+                rare |= CardRarityOdds.RegularRareOdds + offset > 0f;
+                offset += rarityOdds.RarityGrowth;
+            }
+
+            FirstRewardCards = RewardCards.Where(c => Cards[c].Rarity is CardRarity.Common or CardRarity.Uncommon || (rare && Cards[c].Rarity == CardRarity.Rare)).ToArray();
 
             List<PotionModel> potions = PotionFactory.GetPotionOptions(player).ToList();
             PotionOptions = potions.Select(p => Potions.Id(p)).ToArray();
@@ -197,7 +221,7 @@ public sealed class GameData
 
             w.WriteNumber("rare_odds", CardRarityOdds.RegularRareOdds);
             w.WriteNumber("uncommon_odds", CardRarityOdds.regularUncommonOdds);
-            w.WriteNumber("rarity_growth", player.PlayerOdds.CardRarity.RarityGrowth);
+            w.WriteNumber("rarity_growth", rarityOdds.RarityGrowth);
 
             MapPointTypeCounts counts = new(0, 0);
             w.WriteNumber("map_elites", counts.NumOfElites);
@@ -228,7 +252,8 @@ public sealed class GameData
             Elite = act.AllEliteEncounters.Select(e => Encounters.Id(e)).ToArray(),
             Boss = act.AllBossEncounters.Select(e => Encounters.Id(e)).ToArray(),
             Ancients = act.GetUnlockedAncients(unlocks).Select(a => Ancients.Id(a)).ToArray(),
-            Rooms = act.GetNumberOfRooms(false)
+            Rooms = act.GetNumberOfRooms(false),
+            WeakCount = (int)AccessTools.PropertyGetter(act.GetType(), "NumberOfWeakEncounters").Invoke(act, null)!
         };
 
         w.WriteStartObject();
@@ -239,7 +264,7 @@ public sealed class GameData
         w.WriteInts("boss", info.Boss);
         w.WriteInts("ancients", info.Ancients);
         w.WriteNumber("rooms", info.Rooms);
-        w.WriteNumber("weak_count", (int)AccessTools.PropertyGetter(act.GetType(), "NumberOfWeakEncounters").Invoke(act, null)!);
+        w.WriteNumber("weak_count", info.WeakCount);
         WriteMapRolls(w, act);
         w.WriteEndObject();
         return info;
@@ -338,23 +363,62 @@ public sealed class GameData
     };
 
     // Everything a Neow relic can hand out, for the pickers. All empty for a relic without a roll.
+    // Card rewards only ever roll a common, uncommon or rare card, and a relic pull skips the
+    // relics that are not allowed.
     public (int[] Cards, int[] Relics, int[] Potions) NeowGiveOptions(int relic)
     {
+        int[] Rolled(int[] cards) => cards.Where(c => Cards[c].Rarity is CardRarity.Common or CardRarity.Uncommon or CardRarity.Rare).ToArray();
         int[] OfRarity(params CardRarity[] rarities) => RewardCards.Where(c => rarities.Contains(Cards[c].Rarity)).ToArray();
         return Relics[relic] switch
         {
             ArcaneScroll or HeftyTablet => (OfRarity(CardRarity.Rare), [], []),
-            LeadPaperweight => (ColorlessCards, [], []),
-            LostCoffer => (OfRarity(CardRarity.Common, CardRarity.Uncommon, CardRarity.Rare), [], PotionOptions),
+            LeadPaperweight => (Rolled(ColorlessCards), [], []),
+            LostCoffer => (Rolled(RewardCards), [], PotionOptions),
             ScrollBoxes => (OfRarity(CardRarity.Common, CardRarity.Uncommon), [], []),
-            SmallCapsule or LargeCapsule => ([], PlayerBag.Where(r => Relics[r].Rarity is RelicRarity.Common or RelicRarity.Uncommon or RelicRarity.Rare).ToArray(), []),
+            SmallCapsule or LargeCapsule =>
+                ([], PlayerBag.Where(r => Relics[r].Rarity is RelicRarity.Common or RelicRarity.Uncommon or RelicRarity.Rare && !BagDisallowed.Contains(r)).ToArray(), []),
             NeowsBones => (Curses, BonesRelics, []),
-            Kaleidoscope => (OtherCharacterCards, [], []),
+            Kaleidoscope => (Rolled(OtherCharacterCards), [], []),
             PhialHolster => ([], [], PotionOptions),
-            LeafyPoultice or NewLeaf => (OfRarity(CardRarity.Common, CardRarity.Uncommon, CardRarity.Rare), [], []),
+            LeafyPoultice or NewLeaf => (Rolled(RewardCards), [], []),
             _ => ([], [], [])
         };
     }
+
+    public int[] NeowGiveItems(int relic, GiveItem what)
+    {
+        (int[] cards, int[] relics, int[] potions) = NeowGiveOptions(relic);
+        return what switch
+        {
+            GiveItem.Card => cards,
+            GiveItem.Relic => relics,
+            _ => potions
+        };
+    }
+
+    // How many different cards, relics and potions a Neow relic hands out at once.
+    public (int Cards, int Relics, int Potions) NeowGiveCapacity(int relic)
+    {
+        if (NeowGiveOf(Relics[relic]) is not (_, int count))
+            return (0, 0, 0);
+        return Relics[relic] switch
+        {
+            LostCoffer => (count, 0, 1),
+            ScrollBoxes or Kaleidoscope => (count * 3, 0, 0),
+            SmallCapsule or LargeCapsule => (0, count, 0),
+            NeowsBones => (1, count, 0),
+            PhialHolster => (0, 0, count),
+            _ => (count, 0, 0)
+        };
+    }
+
+    // The fights that can be among the first `within` of an act slot. Every act opens with its
+    // weak fights, so a regular one cannot come before those are through.
+    public IEnumerable<int> FightOptions(int slot, bool elite, int within) =>
+        SlotActs[slot]
+            .Select(a => ActInfos[a])
+            .SelectMany(a => elite ? a.Elite : within > a.WeakCount ? a.Weak.Concat(a.Regular) : a.Weak)
+            .Distinct();
 
     private int[] WriteCards(Utf8JsonWriter w, string name, IEnumerable<CardModel> cards)
     {
@@ -432,14 +496,24 @@ public sealed class GameData
         w.WriteNumber("talisman", extras[4]);
         w.WriteNumber("pomander", extras[5]);
         w.WriteNumber("large_capsule", Relic<LargeCapsule>());
-        w.WriteStartArray("exclusions");
-        w.WriteInts([Relic<CursedPearl>(), Relic<GoldenPearl>()]);
-        w.WriteInts([Relic<HeftyTablet>(), Relic<ArcaneScroll>()]);
-        w.WriteInts([Relic<LeafyPoultice>(), Relic<NewLeaf>()]);
-        w.WriteInts([Relic<PrecariousShears>(), Relic<PreciseScissors>()]);
-        w.WriteInts([Relic<NeowsSacrifice>(), Relic<PhialHolster>()]);
-        w.WriteInts([Relic<NeowsSacrifice>(), Relic<LostCoffer>()]);
-        w.WriteEndArray();
+        int[][] exclusions =
+        [
+            [Relic<CursedPearl>(), Relic<GoldenPearl>()],
+            [Relic<HeftyTablet>(), Relic<ArcaneScroll>()],
+            [Relic<LeafyPoultice>(), Relic<NewLeaf>()],
+            [Relic<PrecariousShears>(), Relic<PreciseScissors>()],
+            [Relic<NeowsSacrifice>(), Relic<PhialHolster>()],
+            [Relic<NeowsSacrifice>(), Relic<LostCoffer>()]
+        ];
+        w.WriteIntLists("exclusions", exclusions);
+        // The Large Capsule curse skips the Lava Rock or Small Capsule roll, and each of the three
+        // rolls adds one relic or the other.
+        NeowNeverTogether =
+        [
+            .. exclusions,
+            [Relic<LargeCapsule>(), extras[0]], [Relic<LargeCapsule>(), extras[1]],
+            [extras[0], extras[1]], [extras[2], extras[3]], [extras[4], extras[5]]
+        ];
         w.WriteInts("disallowed", disallowed);
 
         w.WriteStartArray("gives");
@@ -491,7 +565,16 @@ public sealed class GameData
             w.WriteNumber("claw", Cards.Id(ModelDb.Card<Claw>()));
         else
             w.WriteNull("claw");
-        w.WriteInts("bag_disallowed", playerBag.Where(r => !r.IsAllowed(run.State)).Select(r => Relics.Id(r)));
+        BagDisallowed = playerBag.Where(r => !r.IsAllowed(run.State)).Select(r => Relics.Id(r)).ToArray();
+        w.WriteInts("bag_disallowed", BagDisallowed);
+        w.WriteStartArray("bag_shuffles");
+        foreach (RelicModel r in playerBag)
+        {
+            if (SeedSimulator.PickupUpgradeChoices(player, r) is { } choices)
+                w.WriteInts([Relics.Id(r), choices.Count]);
+        }
+
+        w.WriteEndArray();
         w.WriteEndObject();
     }
 }

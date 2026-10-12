@@ -88,11 +88,16 @@ public sealed class FilterPanel
 
     private void Add(Cond? cond)
     {
-        if (cond != null && !_conds.Contains(cond))
+        if (cond == null || _conds.Contains(cond))
+            return;
+        if (Feasibility.Conflict(_data, _conds, cond) is { } reason)
         {
-            _conds.Add(cond);
-            RefreshChips();
+            _notify($"Not added. {reason}");
+            return;
         }
+
+        _conds.Add(cond);
+        RefreshChips();
     }
 
     private void SaveSearch()
@@ -111,22 +116,25 @@ public sealed class FilterPanel
     {
         (List<Cond> conds, int dropped) = CondCodec.Read(search.CondsJson, _data);
         _conds.Clear();
-        _conds.AddRange(conds);
+        foreach (Cond cond in conds)
+        {
+            if (Feasibility.Conflict(_data, _conds, cond) == null)
+                _conds.Add(cond);
+            else
+                dropped++;
+        }
+
         RefreshChips();
         _notify(dropped == 0
             ? "Filters loaded."
-            : $"Loaded. {dropped} filter{(dropped == 1 ? "" : "s")} left out: not available in this setup.");
+            : $"Loaded. {dropped} filter{(dropped == 1 ? "" : "s")} left out: not possible in this setup.");
     }
 
     private Visual VisualOf(Cond cond) => cond switch
     {
         NeowOfferCond c => Visuals.Relic(_data, c.Relic, _data.NeowCurses.Contains(c.Relic)),
-        NeowGivesCond c => c.What switch
-        {
-            GiveItem.Card => Visuals.Card(_data, c.Item),
-            GiveItem.Relic => Visuals.Relic(_data, c.Item),
-            _ => Visuals.Potion(_data, c.Item)
-        },
+        NeowGivesCond c => Given(c.What, c.Item),
+        NeowNestedCond c => Given(c.What, c.Item),
         BossCond c => Visuals.Encounter(_data, c.Encounter, RoomType.Boss),
         SecondBossCond c => Visuals.Encounter(_data, c.Encounter, RoomType.Boss),
         AncientCond c => Visuals.Ancient(_data, c.Ancient),
@@ -136,6 +144,13 @@ public sealed class FilterPanel
         MapCountCond c => Visuals.MapType(Math.Max(0, Array.FindIndex(Visuals.MapTypes, t => t.Type == c.PointType))),
         RewardCardCond c => Visuals.Card(_data, c.Card),
         _ => Visuals.Named(cond.Describe(_data))
+    };
+
+    private Visual Given(GiveItem what, int item) => what switch
+    {
+        GiveItem.Card => Visuals.Card(_data, item),
+        GiveItem.Relic => Visuals.Relic(_data, item),
+        _ => Visuals.Potion(_data, item)
     };
 
     // ---- tabs ----
@@ -169,38 +184,63 @@ public sealed class FilterPanel
         relics.SetItems(_data.NeowRelics.Select(r => (r, Visuals.Relic(_data, r, _data.NeowCurses.Contains(r)))));
         IconGrid gives = new(_hover, optional: true);
         Label givesTitle = Visuals.MutedLabel("");
+        // Neow's Bones gives relics that roll things of their own.
+        IconGrid nested = new(_hover, optional: true);
+        Label nestedTitle = Visuals.MutedLabel("");
 
-        // The second grid mixes cards, relics and potions, told apart by a stride on the id.
+        // These grids mix cards, relics and potions, told apart by a stride on the id.
         const int stride = 1_000_000;
+        IEnumerable<(int, Visual)> Mixed((int[] Cards, int[] Relics, int[] Potions) options) =>
+            options.Relics.Select(g => ((int)GiveItem.Relic * stride + g, Visuals.Relic(_data, g)))
+                .Concat(options.Potions.Select(p => ((int)GiveItem.Potion * stride + p, Visuals.Potion(_data, p))))
+                .Concat(options.Cards.Select(c => ((int)GiveItem.Card * stride + c, Visuals.Card(_data, c))));
+
+        void ShowNested()
+        {
+            (int[] Cards, int[] Relics, int[] Potions) options = ([], [], []);
+            int? via = gives.Selected is { } given && given / stride == (int)GiveItem.Relic ? given % stride : null;
+            if (via is { } v)
+                options = _data.NeowGiveOptions(v);
+            nested.SetItems(Mixed(options));
+            bool any = options.Cards.Length + options.Relics.Length + options.Potions.Length > 0;
+            nested.Root.Visible = any;
+            nestedTitle.Visible = any;
+            nestedTitle.Text = any ? $"Optional: what {_data.RelicName(via!.Value)} must give in turn." : "";
+            // Three grids in one tab: the first one gives up room.
+            relics.Root.SizeFlagsStretchRatio = any ? 0.5f : 1f;
+        }
+
         void ShowGives()
         {
-            int[] cards = [], givenRelics = [], potions = [];
+            (int[] Cards, int[] Relics, int[] Potions) options = ([], [], []);
             if (relics.Selected is { } r)
-                (cards, givenRelics, potions) = _data.NeowGiveOptions(r);
-            gives.SetItems(givenRelics.Select(g => ((int)GiveItem.Relic * stride + g, Visuals.Relic(_data, g)))
-                .Concat(potions.Select(p => ((int)GiveItem.Potion * stride + p, Visuals.Potion(_data, p))))
-                .Concat(cards.Select(c => ((int)GiveItem.Card * stride + c, Visuals.Card(_data, c)))));
-            bool any = cards.Length + givenRelics.Length + potions.Length > 0;
+                options = _data.NeowGiveOptions(r);
+            gives.SetItems(Mixed(options));
+            bool any = options.Cards.Length + options.Relics.Length + options.Potions.Length > 0;
             gives.Root.Visible = any;
             givesTitle.Text = relics.Selected is not { } picked
                 ? ""
                 : any
                     ? $"Optional: what {_data.RelicName(picked)} must give. Leave unpicked for anything."
                     : $"{_data.RelicName(picked)} rolls nothing when you take it.";
+            ShowNested();
         }
 
         relics.Changed += ShowGives;
+        gives.Changed += ShowNested;
         ShowGives();
 
         return Tab("One of Neow's three offers. Red frames are the cursed offers.",
             [],
-            [relics.Root, givesTitle, gives.Root],
+            [relics.Root, givesTitle, gives.Root, nestedTitle, nested.Root],
             [],
             () => relics.Selected is not { } relic
                 ? null
-                : gives.Selected is { } item
-                    ? new NeowGivesCond(relic, (GiveItem)(item / stride), item % stride)
-                    : new NeowOfferCond(relic));
+                : gives.Selected is not { } item
+                    ? new NeowOfferCond(relic)
+                    : nested.Selected is { } inner
+                        ? new NeowNestedCond(relic, item % stride, (GiveItem)(inner / stride), inner % stride)
+                        : new NeowGivesCond(relic, (GiveItem)(item / stride), item % stride));
     }
 
     private Control ActTab()
@@ -259,14 +299,14 @@ public sealed class FilterPanel
         Choice slot = SlotChoice();
         Choice kind = new([(0, "Fight"), (1, "Elite")]);
         IconGrid grid = new(_hover);
-        void Refill() => grid.SetItems(kind.Value == 1
-            ? SlotItems(slot.Value, a => a.Elite).Select(e => (e, Visuals.Encounter(_data, e, RoomType.Elite)))
-            : SlotItems(slot.Value, a => a.Weak.Concat(a.Regular)).Select(e => (e, Visuals.Encounter(_data, e, RoomType.Monster))));
+        SpinBox within = Visuals.Spin(1, 15, 1);
+        void Refill() => grid.SetItems(_data.FightOptions(slot.Value, kind.Value == 1, (int)within.Value)
+            .Select(e => (e, Visuals.Encounter(_data, e, kind.Value == 1 ? RoomType.Elite : RoomType.Monster))));
         slot.Changed += Refill;
         kind.Changed += Refill;
+        within.ValueChanged += _ => Refill();
         Refill();
-        SpinBox within = Visuals.Spin(1, 15, 1);
-        return Tab("Fights and elites are queued per act in the order you will meet them.",
+        return Tab("Fights and elites are queued per act in the order you will meet them. An act opens with its easy fights; raise the number below to pick from the ones after them.",
             [kind.Root, slot.Root], [grid.Root], [new Label { Text = "within the first" }, within],
             () => grid.Selected is { } e ? new EncounterCond(slot.Value, kind.Value == 1, e, (int)within.Value) : null);
     }
@@ -275,7 +315,7 @@ public sealed class FilterPanel
     {
         Choice bag = new([(0, "Your bag"), (1, "Shared bag")]);
         IconGrid grid = new(_hover);
-        void Refill() => grid.SetItems((bag.Value == 1 ? _data.SharedBag : _data.PlayerBag)
+        void Refill() => grid.SetItems((bag.Value == 1 ? _data.SharedBagDealt : _data.PlayerBag)
             .OrderBy(r => _data.Relics[r].Rarity)
             .Select(r => (r, Visuals.Relic(_data, r))));
         bag.Changed += Refill;
@@ -307,12 +347,12 @@ public sealed class FilterPanel
     private Control RewardTab()
     {
         IconGrid grid = new(_hover);
-        grid.SetItems(_data.RewardCards.OrderBy(c => _data.Cards[c].Rarity).Select(c => (c, Visuals.Card(_data, c))));
+        grid.SetItems(_data.FirstRewardCards.OrderBy(c => _data.Cards[c].Rarity).Select(c => (c, Visuals.Card(_data, c))));
         Button potion = new() { Text = "Add: drops a potion" };
         potion.Pressed += () => Add(new RewardPotionCond(true));
         Button noPotion = new() { Text = "Add: drops no potion" };
         noPotion.Pressed += () => Add(new RewardPotionCond(false));
-        return Tab("The reward of the first fight. Holds if the first room is a normal fight and your Neow pick gave no cards, relics or potions.",
+        return Tab("The reward of the first fight, with the cards it can roll this early. Holds if the first room is a normal fight and your Neow pick gave no cards, relics or potions.",
             [potion, noPotion], [grid.Root], [new Label { Text = "Card reward has the picked card" }],
             () => grid.Selected is { } c ? new RewardCardCond(c) : null);
     }

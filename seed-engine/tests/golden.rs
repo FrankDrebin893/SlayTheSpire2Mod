@@ -55,3 +55,45 @@ fn map_generation_speed() {
     }
     println!("{:.3} ms per map on average, slowest {:.1} ms ({})", start.elapsed().as_secs_f64() * 1000.0 / n as f64, slowest.0, slowest.1);
 }
+
+/// A filter on what a relic of Neow's Bones gives finds the seeds whose simulation shows it,
+/// and all such filters on one seed must agree on the order the relics are taken in.
+#[test]
+fn nested_filters_follow_the_simulation() {
+    let mut checked = 0;
+    for (name, snapshot, cases) in fixtures() {
+        for case in cases {
+            let seed = case["seed"].as_str().unwrap();
+            let offers = case["neow"].as_array().unwrap();
+            for (offer, outcome) in offers.iter().zip(case["neow_outcomes"].as_array().unwrap()) {
+                let nested = outcome["nested"].as_array().unwrap();
+                let cond = |i: usize, order: &str| {
+                    let card = nested[i][order]["cards"].as_array().unwrap().first().cloned()?;
+                    Some(serde_json::json!({ "kind": "neow_nested", "relic": offer, "via": outcome["relics"][i], "what": "card", "item": card }))
+                };
+                let matches = |conds: Vec<Value>| {
+                    let conds: Vec<sim::Cond> = serde_json::from_value(Value::Array(conds)).unwrap();
+                    sim::Filter::new(conds).matches(&snapshot, rng::hash(seed))
+                };
+                for i in 0..nested.len() {
+                    for order in ["first", "second"] {
+                        if let Some(c) = cond(i, order) {
+                            assert!(matches(vec![c]), "{name}, seed {seed}");
+                            checked += 1;
+                        }
+                    }
+                }
+                // Both taken first cannot happen, unless they would give those cards second too.
+                if nested.len() != 2 {
+                    continue;
+                }
+                if let (Some(a), Some(b)) = (cond(0, "first"), cond(1, "first")) {
+                    let has = |i: usize, c: &Value| nested[i]["second"]["cards"].as_array().unwrap().contains(&c["item"]);
+                    assert_eq!(matches(vec![a.clone(), b.clone()]), has(0, &a) || has(1, &b), "{name}, seed {seed}");
+                }
+            }
+        }
+    }
+    assert!(checked > 0, "no fixture has Neow's Bones");
+    println!("checked {checked} nested filters");
+}

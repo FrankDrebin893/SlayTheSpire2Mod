@@ -209,16 +209,74 @@ public static class SeedSimulator
     // NeowsBones.GetValidRelics
     public static List<RelicModel> BonesRelics(Player player) => ((IEnumerable<RelicModel>)BonesValidRelics.Invoke(null, [player])!).ToList();
 
-    // AfterObtained of one Neow relic up to the point where the player is shown the result, on a
-    // run of its own so that the relic is the first thing to draw from its streams. Each case
-    // repeats what the relic does with the game's own factories.
+    // The deck cards War Paint or Whetstone picks its upgrades from; null for any other relic.
+    public static List<CardModel>? PickupUpgradeChoices(Player player, RelicModel relic)
+    {
+        CardType? type = relic switch
+        {
+            WarPaint => CardType.Skill,
+            Whetstone => CardType.Attack,
+            _ => null
+        };
+        return type == null ? null : PileType.Deck.GetPile(player).Cards.Where(c => c != null && c.Type == type && c.IsUpgradable).ToList();
+    }
+
+    // What one Neow offer gives when it is taken, on runs of its own so that the relic is the
+    // first thing to draw from its streams.
     private static NeowOutcome NeowOutcome(GameData data, string seed, int relicId)
+    {
+        if (relicId < 0 || GameData.NeowGiveOf(data.Relics[relicId]) is not (_, int count))
+            return new NeowOutcome();
+        if (data.Relics[relicId] is not NeowsBones)
+            return Obtain(data, StartRun(data, seed), relicId);
+
+        // NeowsBones.AfterObtained: its relics are rewards that cannot be skipped, taken in the
+        // order the player likes, and the curse is rolled once they have all been taken.
+        (Run Run, int[] Given) Begin()
+        {
+            Run run = StartRun(data, seed);
+            List<RelicModel> valid = BonesRelics(run.Player);
+            run.Player.PlayerRng.Rewards.Shuffle(valid);
+            return (run, valid.Take(count).Select(r => data.Relics.Id(r)).ToArray());
+        }
+
+        (Run last, int[] given) = Begin();
+        NestedOutcome[] nested = new NestedOutcome[given.Length];
+        for (int i = 0; i < given.Length; i++)
+        {
+            NeowOutcome first = Obtain(data, Begin().Run, given[i]);
+            last = Begin().Run;
+            for (int j = 0; j < given.Length; j++)
+            {
+                if (j != i)
+                    Obtain(data, last, given[j]);
+            }
+
+            nested[i] = new NestedOutcome { First = first, Second = Obtain(data, last, given[i]) };
+        }
+
+        List<CardModel> curses = ModelDb.CardPool<CurseCardPool>().GetUnlockedCards(last.Player.UnlockState, last.Player.RunState.CardMultiplayerConstraint)
+            .Where(c => c.CanBeGeneratedByModifiers)
+            .OrderBy(c => c.Id)
+            .ToList();
+        return new NeowOutcome
+        {
+            Relics = given,
+            Cards = last.State.Rng.Niche.NextItem(curses) is { } curse ? [data.Cards.Id(curse)] : [],
+            Nested = nested
+        };
+    }
+
+    // AfterObtained of one Neow relic other than Neow's Bones, up to the point where the player
+    // is shown the result, continuing on the streams of the run. Each case repeats what the relic
+    // does with the game's own factories.
+    private static NeowOutcome Obtain(GameData data, Run run, int relicId)
     {
         NeowOutcome outcome = new();
         if (relicId < 0 || GameData.NeowGiveOf(data.Relics[relicId]) is not (_, int count))
             return outcome;
 
-        (RunState state, Player player, _) = StartRun(data, seed);
+        (RunState state, Player player, _) = run;
         Rng rewards = player.PlayerRng.Rewards;
         CardPoolModel pool = player.Character.CardPool;
         List<CardModel> cards = [];
@@ -245,18 +303,13 @@ public static class SeedSimulator
                 break;
             case SmallCapsule or LargeCapsule:
                 for (int i = 0; i < count; i++)
-                    relics.Add(RelicFactory.PullNextRelicFromFront(player));
-                break;
-            case NeowsBones:
-                List<RelicModel> valid = BonesRelics(player);
-                rewards.Shuffle(valid);
-                relics.AddRange(valid.Take(count));
-                List<CardModel> curses = ModelDb.CardPool<CurseCardPool>().GetUnlockedCards(player.UnlockState, player.RunState.CardMultiplayerConstraint)
-                    .Where(c => c.CanBeGeneratedByModifiers)
-                    .OrderBy(c => c.Id)
-                    .ToList();
-                if (state.Rng.Niche.NextItem(curses) is { } curse)
-                    cards.Add(curse);
+                {
+                    RelicModel pulled = RelicFactory.PullNextRelicFromFront(player);
+                    relics.Add(pulled);
+                    // WarPaint.AfterObtained and Whetstone.AfterObtained, against the starter deck.
+                    PickupUpgradeChoices(player, pulled)?.StableShuffle(state.Rng.Niche);
+                }
+
                 break;
             case Kaleidoscope:
                 for (int i = 0; i < count; i++)

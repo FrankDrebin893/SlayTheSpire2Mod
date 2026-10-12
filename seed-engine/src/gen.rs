@@ -22,6 +22,7 @@ const POTION_RARITY_UNCOMMON: u32 = 2;
 const POTION_RARITY_RARE: u32 = 3;
 
 /// Relics of one rarity in the order a grab bag hands them out.
+#[derive(Clone)]
 pub struct RelicDeque {
     pub rarity: u32,
     pub relics: Vec<u32>,
@@ -361,12 +362,46 @@ pub fn first_reward(snap: &Snapshot, seed: u64, first_encounter: Option<u32>) ->
     Reward { gold, potion, cards }
 }
 
-/// What a Neow relic hands out when it is obtained.
-#[derive(Default)]
+/// What a relic hands out when it is obtained.
+#[derive(Default, Clone)]
 pub struct Outcome {
     pub cards: Vec<u32>,
     pub relics: Vec<u32>,
     pub potions: Vec<u32>,
+    /// One per entry of `relics` when those roll things of their own (Neow's Bones).
+    pub nested: Vec<Nested>,
+}
+
+/// What a relic handed out by Neow's Bones gives. The player takes the relics of Neow's Bones
+/// in either order, and the later one carries on from the streams the earlier one used.
+#[derive(Default, Clone)]
+pub struct Nested {
+    pub first: Outcome,
+    pub second: Outcome,
+}
+
+/// The streams the Neow relics draw from, and the player's relic bag once something pulls from it.
+#[derive(Clone)]
+struct Streams {
+    seed: u64,
+    rewards: Rng,
+    niche: Rng,
+    transformations: Rng,
+    potions: Rng,
+    bag: Option<Vec<RelicDeque>>,
+}
+
+impl Streams {
+    fn new(seed: u64) -> Self {
+        Streams {
+            seed,
+            rewards: Rng::named(seed, "rewards"),
+            niche: Rng::named(seed, "niche"),
+            transformations: Rng::named(seed, "transformations"),
+            potions: Rng::named(seed, "combat_potion_generation"),
+            bag: None,
+        }
+    }
 }
 
 /// CreateForReward with base odds and the upgrade roll, as relics and events use it.
@@ -422,27 +457,26 @@ fn transform(snap: &Snapshot, rng: &mut Rng) -> Option<u32> {
     rng.next_item(&options)
 }
 
-/// AfterObtained of the Neow relics that roll something, each as the first thing to draw from
-/// its streams. Relics without a roll give an empty outcome.
-pub fn neow_outcome(snap: &Snapshot, seed: u64, relic: u32) -> Outcome {
+/// AfterObtained of one Neow relic other than Neow's Bones, continuing on `st`. Relics without
+/// a roll give an empty outcome.
+fn obtain(snap: &Snapshot, relic: u32, st: &mut Streams) -> Outcome {
     let mut out = Outcome::default();
     let Some(neow) = &snap.neow else { return out };
     let Some(give) = neow.gives.iter().find(|g| g.relic == relic) else { return out };
-    let mut rewards = Rng::named(seed, "rewards");
 
     match give.kind {
         GiveKind::ArcaneScroll | GiveKind::HeftyTablet => {
             let rares = with_rarity(&snap.cards, CARD_RARITY_RARE);
             for _ in 0..give.count {
-                if let Some(card) = pick_card(snap, &mut rewards, &rares, &out.cards, Odds::Uniform) {
+                if let Some(card) = pick_card(snap, &mut st.rewards, &rares, &out.cards, Odds::Uniform) {
                     out.cards.push(card);
                 }
             }
         }
-        GiveKind::LeadPaperweight => out.cards = reward_cards(snap, &mut rewards, &neow.colorless, give.count),
+        GiveKind::LeadPaperweight => out.cards = reward_cards(snap, &mut st.rewards, &neow.colorless, give.count),
         GiveKind::LostCoffer => {
-            out.cards = reward_cards(snap, &mut rewards, &snap.cards, give.count);
-            out.potions = random_potions(snap, &mut rewards, 1);
+            out.cards = reward_cards(snap, &mut st.rewards, &snap.cards, give.count);
+            out.potions = random_potions(snap, &mut st.rewards, 1);
         }
         GiveKind::ScrollBoxes => {
             // ScrollBoxes.GenerateRandomBundles
@@ -451,14 +485,14 @@ pub fn neow_outcome(snap: &Snapshot, seed: u64, relic: u32) -> Outcome {
             let mut used: Vec<u32> = Vec::new();
             for _ in 0..give.count {
                 if let Some(claw) = neow.claw {
-                    if rewards.next_int(100) < 1 {
+                    if st.rewards.next_int(100) < 1 {
                         out.cards.extend([claw; 3]);
                         continue;
                     }
                 }
                 for pool in [&commons, &commons, &uncommons] {
                     let options: Vec<u32> = pool.iter().map(|c| c.id).filter(|c| !used.contains(c)).collect();
-                    if let Some(card) = rewards.next_item(&options) {
+                    if let Some(card) = st.rewards.next_item(&options) {
                         out.cards.push(card);
                         used.push(card);
                     }
@@ -466,42 +500,75 @@ pub fn neow_outcome(snap: &Snapshot, seed: u64, relic: u32) -> Outcome {
             }
         }
         GiveKind::SmallCapsule | GiveKind::LargeCapsule => {
-            let mut up_front = Rng::named(seed, "up_front");
-            populate_bag(&snap.shared_bag, &mut up_front);
-            let mut bag = populate_bag(&snap.player_bag, &mut up_front);
+            let seed = st.seed;
+            let bag = st.bag.get_or_insert_with(|| {
+                let mut up_front = Rng::named(seed, "up_front");
+                populate_bag(&snap.shared_bag, &mut up_front);
+                populate_bag(&snap.player_bag, &mut up_front)
+            });
             for _ in 0..give.count {
-                if let Some(r) = pull_relic(&mut rewards, &mut bag, &neow.bag_disallowed) {
+                if let Some(r) = pull_relic(&mut st.rewards, bag, &neow.bag_disallowed) {
                     out.relics.push(r);
+                    // War Paint and Whetstone shuffle the cards they could upgrade.
+                    if let Some(&[_, n]) = neow.bag_shuffles.iter().find(|s| s[0] == r) {
+                        st.niche.shuffle(&mut vec![(); n as usize]);
+                    }
                 }
             }
         }
-        GiveKind::NeowsBones => {
-            let mut relics = neow.bones.clone();
-            rewards.shuffle(&mut relics);
-            relics.truncate(give.count);
-            out.relics = relics;
-            out.cards.extend(Rng::named(seed, "niche").next_item(&neow.curses));
-        }
+        GiveKind::NeowsBones => {}
         GiveKind::Kaleidoscope => {
-            let mut niche = Rng::named(seed, "niche");
             for _ in 0..give.count {
                 let mut pools: Vec<usize> = (0..neow.other_pools.len()).collect();
-                niche.shuffle(&mut pools);
+                st.niche.shuffle(&mut pools);
                 for &pool in pools.iter().take(3) {
-                    out.cards.extend(reward_cards(snap, &mut rewards, &neow.other_pools[pool], 1));
+                    out.cards.extend(reward_cards(snap, &mut st.rewards, &neow.other_pools[pool], 1));
                 }
             }
         }
-        GiveKind::PhialHolster => out.potions = random_potions(snap, &mut Rng::named(seed, "combat_potion_generation"), give.count),
+        GiveKind::PhialHolster => out.potions = random_potions(snap, &mut st.potions, give.count),
         GiveKind::LeafyPoultice => {
             // The first Strike, then the first Defend.
-            let mut rng = Rng::named(seed, "transformations");
             for _ in 0..2 {
-                out.cards.extend(transform(snap, &mut rng));
+                out.cards.extend(transform(snap, &mut st.transformations));
             }
         }
-        GiveKind::NewLeaf => out.cards.extend(transform(snap, &mut Rng::named(seed, "niche"))),
+        GiveKind::NewLeaf => out.cards.extend(transform(snap, &mut st.niche)),
     }
 
+    out
+}
+
+/// AfterObtained of the Neow relics that roll something, each as the first thing to draw from
+/// its streams. Relics without a roll give an empty outcome.
+pub fn neow_outcome(snap: &Snapshot, seed: u64, relic: u32) -> Outcome {
+    let mut st = Streams::new(seed);
+    let Some(neow) = &snap.neow else { return Outcome::default() };
+    let Some(give) = neow.gives.iter().find(|g| g.relic == relic) else { return Outcome::default() };
+    if give.kind != GiveKind::NeowsBones {
+        return obtain(snap, relic, &mut st);
+    }
+
+    // NeowsBones.AfterObtained: the relics are rewards that cannot be skipped, and the curse is
+    // rolled once they have all been taken.
+    let mut out = Outcome::default();
+    let mut relics = neow.bones.clone();
+    st.rewards.shuffle(&mut relics);
+    relics.truncate(give.count);
+    for (i, &given) in relics.iter().enumerate() {
+        let first = obtain(snap, given, &mut st.clone());
+        let mut after = st.clone();
+        for (_, &other) in relics.iter().enumerate().filter(|&(j, _)| j != i) {
+            obtain(snap, other, &mut after);
+        }
+        let second = obtain(snap, given, &mut after);
+        out.nested.push(Nested { first, second });
+        // Every relic draws the same number of times from the niche stream whenever it is taken.
+        if i + 1 == relics.len() {
+            st = after;
+        }
+    }
+    out.relics = relics;
+    out.cards.extend(st.niche.next_item(&neow.curses));
     out
 }

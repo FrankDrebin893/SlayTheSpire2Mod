@@ -34,6 +34,23 @@ public abstract record Cond
         return Encoding.UTF8.GetString(stream.ToArray());
     }
 
+    // Whether a seed satisfies every condition. Not the same as asking each one: what the relics of
+    // Neow's Bones give depends on the order they are taken in, so the conditions on them must all
+    // hold for one order.
+    public static bool AllMatch(IReadOnlyList<Cond> conds, SimResult r)
+    {
+        if (!conds.All(c => c.Matches(r)))
+            return false;
+        foreach (IGrouping<int, NeowNestedCond> group in conds.OfType<NeowNestedCond>().GroupBy(c => c.Relic))
+        {
+            NeowOutcome outcome = r.NeowOutcomes[Array.IndexOf(r.Neow, group.Key)];
+            if (!Enumerable.Range(0, outcome.Relics.Length).Any(first => group.All(c => c.Holds(outcome, first))))
+                return false;
+        }
+
+        return true;
+    }
+
     protected static bool Within(int[][] lists, int slot, int item, int within) =>
         slot < lists.Length && lists[slot].Take(within).Contains(item);
 
@@ -77,8 +94,7 @@ public sealed record NeowGivesCond(int Relic, GiveItem What, int Item) : Cond
         int offer = Array.IndexOf(r.Neow, Relic);
         if (offer < 0 || offer >= r.NeowOutcomes.Length)
             return false;
-        NeowOutcome o = r.NeowOutcomes[offer];
-        return (What switch { GiveItem.Card => o.Cards, GiveItem.Relic => o.Relics, _ => o.Potions }).Contains(Item);
+        return r.NeowOutcomes[offer].Of(What).Contains(Item);
     }
 
     public string ItemName(GameData d) => What switch
@@ -89,6 +105,49 @@ public sealed record NeowGivesCond(int Relic, GiveItem What, int Item) : Cond
     };
 
     public override string Describe(GameData d) => $"Neow offers {d.RelicName(Relic)} and it gives {ItemName(d)}";
+}
+
+// Neow offers Relic (Neow's Bones), taking it gives the relic Via, and that gives the item.
+public sealed record NeowNestedCond(int Relic, int Via, GiveItem What, int Item) : Cond
+{
+    public override SimParts Needs => SimParts.NeowOutcomes;
+
+    public override void Write(Utf8JsonWriter w)
+    {
+        w.WriteString("kind", "neow_nested");
+        w.WriteNumber("relic", Relic);
+        w.WriteNumber("via", Via);
+        w.WriteString("what", What.ToString().ToLowerInvariant());
+        w.WriteNumber("item", Item);
+    }
+
+    // For some order of taking the relics. Cond.AllMatch asks for one order that suits them all.
+    public override bool Matches(SimResult r)
+    {
+        int offer = Array.IndexOf(r.Neow, Relic);
+        if (offer < 0 || offer >= r.NeowOutcomes.Length)
+            return false;
+        NeowOutcome o = r.NeowOutcomes[offer];
+        return Enumerable.Range(0, o.Relics.Length).Any(first => Holds(o, first));
+    }
+
+    // Whether this holds when the relic at index takenFirst of the outcome is the one taken first.
+    public bool Holds(NeowOutcome outcome, int takenFirst)
+    {
+        int i = Array.IndexOf(outcome.Relics, Via);
+        if (i < 0 || i >= outcome.Nested.Length)
+            return false;
+        return (i == takenFirst ? outcome.Nested[i].First : outcome.Nested[i].Second).Of(What).Contains(Item);
+    }
+
+    public string ItemName(GameData d) => What switch
+    {
+        GiveItem.Card => d.CardName(Item),
+        GiveItem.Relic => d.RelicName(Item),
+        _ => d.PotionName(Item)
+    };
+
+    public override string Describe(GameData d) => $"Neow offers {d.RelicName(Relic)}, it gives {d.RelicName(Via)}, and that gives {ItemName(d)}";
 }
 
 public sealed record ActCond(int Slot, int Act) : Cond

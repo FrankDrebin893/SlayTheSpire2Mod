@@ -97,7 +97,8 @@ public sealed class PreviewPanel
         AddBag(r.SharedRelics);
 
         _detail.AddChild(Visuals.MutedLabel(
-            "Lists show what comes first. Each Neow offer shows what it gives if you take it; relics found inside a capsule or Neow's Bones can roll things of their own, which shifts what comes after them. " +
+            "Lists show what comes first. Each Neow offer shows what it gives if you take it. The relics of Neow's Bones are taken in the order you choose, so what one gives when taken second is shown where it differs; " +
+            "War Paint or Whetstone from a capsule inside Neow's Bones is counted against the starter deck. " +
             "The fight reward assumes a normal first fight and a Neow pick that gives no cards, relics or potions. Custom modifiers are not taken into account."));
     }
 
@@ -147,16 +148,38 @@ public sealed class PreviewPanel
         }
 
         if (outcome.Relics.Length + outcome.Potions.Length > 0)
+            column.AddChild(GivenRow([], outcome.Relics, outcome.Potions));
+
+        // The relics of Neow's Bones roll things of their own. They are taken in either order,
+        // and the one taken second carries on from the streams the first one used.
+        for (int i = 0; i < Math.Min(outcome.Nested.Length, outcome.Relics.Length); i++)
         {
-            HFlowContainer row = Visuals.Flow(4);
-            foreach (int given in outcome.Relics)
-                row.AddChild(Visuals.Tile(Visuals.Relic(_data, given), _hover, 92, 84));
-            foreach (int potion in outcome.Potions)
-                row.AddChild(Visuals.Tile(Visuals.Potion(_data, potion), _hover, 92, 84));
-            column.AddChild(row);
+            NestedOutcome nested = outcome.Nested[i];
+            if (nested.First.IsEmpty && nested.Second.IsEmpty)
+                continue;
+            string given = _data.RelicName(outcome.Relics[i]);
+            column.AddChild(Visuals.MutedLabel($"{given} gives", 14));
+            column.AddChild(GivenRow(nested.First.Cards, nested.First.Relics, nested.First.Potions));
+            if (!nested.Second.SameAs(nested.First))
+            {
+                column.AddChild(Visuals.MutedLabel($"{given} gives, when taken second", 14));
+                column.AddChild(GivenRow(nested.Second.Cards, nested.Second.Relics, nested.Second.Potions));
+            }
         }
 
         return panel;
+    }
+
+    private Control GivenRow(int[] cards, int[] relics, int[] potions)
+    {
+        HFlowContainer row = Visuals.Flow(4);
+        foreach (int card in cards)
+            row.AddChild(Visuals.Tile(Visuals.Card(_data, card), _hover, 92, 84));
+        foreach (int relic in relics)
+            row.AddChild(Visuals.Tile(Visuals.Relic(_data, relic), _hover, 92, 84));
+        foreach (int potion in potions)
+            row.AddChild(Visuals.Tile(Visuals.Potion(_data, potion), _hover, 92, 84));
+        return row;
     }
 
     private Control Act(SimResult r, int i)

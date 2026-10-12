@@ -47,6 +47,26 @@ pub struct OutcomeOut {
     pub cards: Vec<u32>,
     pub relics: Vec<u32>,
     pub potions: Vec<u32>,
+    /// One per entry of `relics` for Neow's Bones, otherwise empty.
+    pub nested: Vec<NestedOut>,
+}
+
+/// What a relic given by Neow's Bones gives when it is taken first and when it is taken second.
+#[derive(Serialize)]
+pub struct NestedOut {
+    pub first: GivenOut,
+    pub second: GivenOut,
+}
+
+#[derive(Serialize)]
+pub struct GivenOut {
+    pub cards: Vec<u32>,
+    pub relics: Vec<u32>,
+    pub potions: Vec<u32>,
+}
+
+fn given(o: Outcome) -> GivenOut {
+    GivenOut { cards: o.cards, relics: o.relics, potions: o.potions }
 }
 
 fn deques(d: Vec<RelicDeque>) -> Vec<DequeOut> {
@@ -78,8 +98,9 @@ pub fn simulate(snap: &Snapshot, seed_text: &str) -> SimOut {
     let neow_outcomes = neow
         .iter()
         .map(|&relic| {
-            let Outcome { cards, relics, potions } = gen::neow_outcome(snap, seed, relic);
-            OutcomeOut { cards, relics, potions }
+            let Outcome { cards, relics, potions, nested } = gen::neow_outcome(snap, seed, relic);
+            let nested = nested.into_iter().map(|n| NestedOut { first: given(n.first), second: given(n.second) }).collect();
+            OutcomeOut { cards, relics, potions, nested }
         })
         .collect();
     let maps = acts
@@ -126,6 +147,9 @@ pub enum Cond {
     NeowCurse { relic: u32 },
     /// The relic is offered and taking it gives the item.
     NeowGives { relic: u32, what: Item, item: u32 },
+    /// The relic is offered, taking it gives the relic `via`, and that gives the item. All of
+    /// these for one relic must hold for the same order of taking what it gives.
+    NeowNested { relic: u32, via: u32, what: Item, item: u32 },
     Act { slot: usize, act: u32 },
     Boss { slot: usize, enc: i32 },
     SecondBoss { enc: i32 },
@@ -149,6 +173,14 @@ pub struct Filter {
     maps: Vec<Cond>,
 }
 
+fn has(outcome: &Outcome, what: Item, item: u32) -> bool {
+    match what {
+        Item::Card => outcome.cards.contains(&item),
+        Item::Relic => outcome.relics.contains(&item),
+        Item::Potion => outcome.potions.contains(&item),
+    }
+}
+
 fn within(list: Option<&Vec<u32>>, item: u32, n: usize) -> bool {
     list.is_some_and(|l| l.iter().take(n).any(|&x| x == item))
 }
@@ -158,7 +190,7 @@ impl Filter {
         let mut f = Filter { neow: vec![], acts: vec![], reward: vec![], up_front: vec![], maps: vec![] };
         for c in conds {
             match c {
-                Cond::NeowOffer { .. } | Cond::NeowCurse { .. } | Cond::NeowGives { .. } => f.neow.push(c),
+                Cond::NeowOffer { .. } | Cond::NeowCurse { .. } | Cond::NeowGives { .. } | Cond::NeowNested { .. } => f.neow.push(c),
                 Cond::Act { .. } => f.acts.push(c),
                 Cond::RewardCard { .. } | Cond::RewardPotion { .. } => f.reward.push(c),
                 Cond::MapCount { .. } => f.maps.push(c),
@@ -179,19 +211,11 @@ impl Filter {
             let ok = self.neow.iter().all(|c| match *c {
                 Cond::NeowOffer { relic } => offers.contains(&relic),
                 Cond::NeowCurse { relic } => offers.last() == Some(&relic),
-                Cond::NeowGives { relic, what, item } => {
-                    offers.contains(&relic) && {
-                        let outcome = gen::neow_outcome(snap, seed, relic);
-                        match what {
-                            Item::Card => outcome.cards.contains(&item),
-                            Item::Relic => outcome.relics.contains(&item),
-                            Item::Potion => outcome.potions.contains(&item),
-                        }
-                    }
-                }
+                Cond::NeowGives { relic, what, item } => offers.contains(&relic) && has(&gen::neow_outcome(snap, seed, relic), what, item),
+                Cond::NeowNested { relic, .. } => offers.contains(&relic),
                 _ => true,
             });
-            if !ok {
+            if !ok || !self.nested_match(snap, seed) {
                 return false;
             }
         }
@@ -235,6 +259,35 @@ impl Filter {
             }
         }
 
+        true
+    }
+
+    /// The NeowNested conditions, per relic they are about: one order of taking what that relic
+    /// gives must satisfy them all.
+    fn nested_match(&self, snap: &Snapshot, seed: u64) -> bool {
+        let mut done: Vec<u32> = Vec::new();
+        for c in &self.neow {
+            let Cond::NeowNested { relic, .. } = *c else { continue };
+            if done.contains(&relic) {
+                continue;
+            }
+            done.push(relic);
+            let outcome = gen::neow_outcome(snap, seed, relic);
+            let holds = |taken_first: usize| {
+                self.neow.iter().all(|c| match *c {
+                    Cond::NeowNested { relic: r, via, what, item } if r == relic => {
+                        outcome.relics.iter().position(|&g| g == via).is_some_and(|i| {
+                            let nested = &outcome.nested[i];
+                            has(if i == taken_first { &nested.first } else { &nested.second }, what, item)
+                        })
+                    }
+                    _ => true,
+                })
+            };
+            if !(0..outcome.relics.len()).any(holds) {
+                return false;
+            }
+        }
         true
     }
 

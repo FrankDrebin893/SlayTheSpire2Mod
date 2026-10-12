@@ -381,14 +381,16 @@ public sealed class Choice
     }
 
     public void Select(int id) => _buttons[id].ButtonPressed = true;
+
+    public void SetText(int id, string text) => _buttons[id].Text = text;
 }
 
-// The strip that explains whatever tile the mouse is over: larger art, name and the game's text.
+// The card that explains whatever tile the mouse is over: larger art, name and the game's text.
 public sealed class InfoPanel
 {
     private readonly TextureRect _art = new()
     {
-        CustomMinimumSize = new Vector2(120, 120),
+        CustomMinimumSize = new Vector2(0, 190),
         ExpandMode = TextureRect.ExpandModeEnum.IgnoreSize,
         StretchMode = TextureRect.StretchModeEnum.KeepAspectCentered
     };
@@ -400,14 +402,11 @@ public sealed class InfoPanel
 
     public InfoPanel()
     {
-        Root.CustomMinimumSize = new Vector2(0, 144);
-        HBoxContainer row = new();
-        row.AddThemeConstantOverride("separation", 12);
-        Root.AddChild(row);
-        row.AddChild(_art);
-
-        VBoxContainer column = new() { SizeFlagsHorizontal = Control.SizeFlags.ExpandFill };
-        row.AddChild(column);
+        Root.CustomMinimumSize = new Vector2(0, 420);
+        VBoxContainer column = new();
+        column.AddThemeConstantOverride("separation", 8);
+        Root.AddChild(column);
+        column.AddChild(_art);
         _title.ClipText = true;
         column.AddChild(_title);
         ScrollContainer scroll = new() { SizeFlagsVertical = Control.SizeFlags.ExpandFill, HorizontalScrollMode = ScrollContainer.ScrollMode.Disabled };

@@ -5,7 +5,7 @@ using MegaCrit.Sts2.Core.Rooms;
 
 namespace RasmusSlayTheSpire2Mod.SeedSearch;
 
-// What one seed generates, shown as rows of game icons, with the act maps underneath.
+// What one seed generates, shown as rows of game icons, with the act maps beside them.
 public sealed class PreviewPanel
 {
     private const int ListPreview = 6;
@@ -14,48 +14,49 @@ public sealed class PreviewPanel
     private readonly GameData _data;
     private readonly Action<Visual> _hover;
     private readonly VBoxContainer _detail = new() { SizeFlagsHorizontal = Control.SizeFlags.ExpandFill };
-    private readonly OptionButton _mapAct = new();
+    private readonly Choice _mapAct;
     private readonly Control _mapCanvas = new();
     private readonly Dictionary<int, Texture2D?> _mapIcons = new();
     private SimResult? _shown;
 
-    public VBoxContainer Root { get; } = new() { SizeFlagsHorizontal = Control.SizeFlags.ExpandFill };
+    public HBoxContainer Root { get; } = new() { SizeFlagsHorizontal = Control.SizeFlags.ExpandFill };
 
     public PreviewPanel(GameData data, Action<Visual> hover)
     {
         _data = data;
         _hover = hover;
-        Root.AddThemeConstantOverride("separation", 8);
+        Root.AddThemeConstantOverride("separation", 14);
 
         ScrollContainer scroll = new()
         {
-            SizeFlagsVertical = Control.SizeFlags.ExpandFill,
-            SizeFlagsStretchRatio = 2f,
+            SizeFlagsHorizontal = Control.SizeFlags.ExpandFill,
+            SizeFlagsStretchRatio = 3f,
             HorizontalScrollMode = ScrollContainer.ScrollMode.Disabled
         };
         _detail.AddThemeConstantOverride("separation", 8);
         scroll.AddChild(_detail);
         Root.AddChild(scroll);
 
+        VBoxContainer mapColumn = new() { SizeFlagsHorizontal = Control.SizeFlags.ExpandFill, SizeFlagsStretchRatio = 2f };
+        mapColumn.AddThemeConstantOverride("separation", 8);
+        Root.AddChild(mapColumn);
         HBoxContainer mapBar = new();
         mapBar.AddThemeConstantOverride("separation", 10);
-        Root.AddChild(mapBar);
+        mapColumn.AddChild(mapBar);
         mapBar.AddChild(new Label { Text = "Map of" });
-        for (int slot = 0; slot < _data.SlotActs.Length; slot++)
-            _mapAct.AddItem($"Act {slot + 1}", slot);
-        _mapAct.ItemSelected += _ => _mapCanvas.QueueRedraw();
-        mapBar.AddChild(_mapAct);
+        _mapAct = new Choice(Enumerable.Range(0, _data.SlotActs.Length).Select(slot => (slot, $"Act {slot + 1}")));
+        _mapAct.Changed += _mapCanvas.QueueRedraw;
+        mapBar.AddChild(_mapAct.Root);
         HFlowContainer legend = Visuals.Flow();
-        legend.SizeFlagsVertical = Control.SizeFlags.ShrinkCenter;
         for (int i = 0; i < Visuals.MapTypes.Length; i++)
             legend.AddChild(Visuals.Pill(Visuals.MapType(i), _hover));
-        mapBar.AddChild(legend);
+        mapColumn.AddChild(legend);
 
         PanelContainer mapPanel = Visuals.Panel(Visuals.InsetColor);
         mapPanel.SizeFlagsVertical = Control.SizeFlags.ExpandFill;
         _mapCanvas.Draw += DrawMap;
         mapPanel.AddChild(_mapCanvas);
-        Root.AddChild(mapPanel);
+        mapColumn.AddChild(mapPanel);
     }
 
     public void Show(SimResult? result, string emptyMessage)
@@ -281,18 +282,17 @@ public sealed class PreviewPanel
 
     private void DrawMap()
     {
-        int slot = _mapAct.ItemCount == 0 ? 0 : _mapAct.GetSelectedId();
+        int slot = _mapAct.Value;
         if (_shown == null || slot >= _shown.Maps.Length || _shown.Maps[slot] is not { } map || map.Points.Length == 0)
             return;
 
-        // Rows run bottom to top like the in-game map, drawn sideways here to fit a wide panel:
-        // the act starts at the left edge and the boss is at the right.
+        // Upright like the in-game map: the act starts at the bottom and the boss is at the top.
         int maxRow = map.Points.Max(p => p[1]);
         Vector2 size = _mapCanvas.Size;
         const float pad = 24;
-        float dx = (size.X - 2 * pad) / Math.Max(1, maxRow - 1);
-        float dy = (size.Y - 2 * pad) / 6;
-        Vector2 At(int col, int row) => new(pad + (row - 1) * dx, pad + col * dy);
+        float dx = (size.X - 2 * pad) / 6;
+        float dy = (size.Y - 2 * pad) / Math.Max(1, maxRow - 1);
+        Vector2 At(int col, int row) => new(pad + col * dx, size.Y - pad - (row - 1) * dy);
 
         foreach (int[] e in map.Edges)
             _mapCanvas.DrawLine(At(e[0], e[1]), At(e[2], e[3]), new Color(1, 1, 1, 0.28f), 2, true);

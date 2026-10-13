@@ -216,10 +216,12 @@ public sealed class FilterPanel
 
         // These grids mix cards, relics and potions, told apart by a stride on the id.
         const int stride = 1_000_000;
-        IEnumerable<(int, Visual)> Mixed((int[] Cards, int[] Relics, int[] Potions) options) =>
-            options.Relics.Select(g => ((int)GiveItem.Relic * stride + g, Visuals.Relic(_data, g)))
-                .Concat(options.Potions.Select(p => ((int)GiveItem.Potion * stride + p, Visuals.Potion(_data, p))))
-                .Concat(options.Cards.Select(c => ((int)GiveItem.Card * stride + c, Visuals.Card(_data, c))));
+        IEnumerable<(string, IEnumerable<(int, Visual)>)> Mixed((int[] Cards, int[] Relics, int[] Potions) options) =>
+            new[]
+            {
+                ("Relics", options.Relics.Select(g => ((int)GiveItem.Relic * stride + g, Visuals.Relic(_data, g)))),
+                ("Potions", options.Potions.Select(p => ((int)GiveItem.Potion * stride + p, Visuals.Potion(_data, p))))
+            }.Concat(CardGroups(options.Cards, (int)GiveItem.Card * stride));
 
         void ShowNested()
         {
@@ -227,7 +229,7 @@ public sealed class FilterPanel
             int? via = gives.Selected is { } given && given / stride == (int)GiveItem.Relic ? given % stride : null;
             if (via is { } v)
                 options = _data.NeowGiveOptions(v);
-            nested.SetItems(Mixed(options));
+            nested.SetGroups(Mixed(options));
             bool any = options.Cards.Length + options.Relics.Length + options.Potions.Length > 0;
             nestedColumn.Visible = any;
             nestedNote.Text = any ? $"Optional: what {_data.RelicName(via!.Value)} gives. Leave unpicked for anything." : "";
@@ -238,7 +240,7 @@ public sealed class FilterPanel
             (int[] Cards, int[] Relics, int[] Potions) options = ([], [], []);
             if (relics.Selected is { } r)
                 options = _data.NeowGiveOptions(r);
-            gives.SetItems(Mixed(options));
+            gives.SetGroups(Mixed(options));
             bool any = options.Cards.Length + options.Relics.Length + options.Potions.Length > 0;
             givesColumn.Visible = any;
             givesNote.Text = any ? $"Optional: what {_data.RelicName(relics.Selected!.Value)} gives. Leave unpicked for anything." : "";
@@ -353,9 +355,10 @@ public sealed class FilterPanel
     {
         Choice bag = new([(0, "Your bag"), (1, "Shared bag")]);
         IconGrid grid = new(_hover);
-        void Refill() => grid.SetItems((bag.Value == 1 ? _data.SharedBagDealt : _data.PlayerBag)
-            .OrderBy(r => _data.Relics[r].Rarity)
-            .Select(r => (r, Visuals.Relic(_data, r))));
+        void Refill() => grid.SetGroups((bag.Value == 1 ? _data.SharedBagDealt : _data.PlayerBag)
+            .GroupBy(r => _data.Relics[r].Rarity)
+            .OrderBy(g => g.Key)
+            .Select(g => (g.Key.ToString(), g.OrderBy(_data.RelicName, StringComparer.CurrentCultureIgnoreCase).Select(r => (r, Visuals.Relic(_data, r))))));
         bag.Changed += Refill;
         Refill();
         SpinBox within = Visuals.Spin(1, 30, 3);
@@ -394,7 +397,7 @@ public sealed class FilterPanel
     private Control RewardTab()
     {
         IconGrid grid = new(_hover);
-        grid.SetItems(_data.FirstRewardCards.OrderBy(c => _data.Cards[c].Rarity).Select(c => (c, Visuals.Card(_data, c))));
+        grid.SetGroups(CardGroups(_data.FirstRewardCards));
         Button potion = new() { Text = "Add: drops a potion" };
         potion.Pressed += () => Add(new RewardPotionCond(true));
         Button noPotion = new() { Text = "Add: drops no potion" };
@@ -509,14 +512,21 @@ public sealed class FilterPanel
     private IEnumerable<int> SlotItems(int slot, Func<ActInfo, IEnumerable<int>> pick) =>
         _data.SlotActs[slot].SelectMany(a => pick(_data.ActInfos[a])).Distinct();
 
+    // One group per rarity, by name within it. The offset tells cards apart in a grid of mixed things.
+    private IEnumerable<(string Heading, IEnumerable<(int Id, Visual Visual)> Items)> CardGroups(IEnumerable<int> cards, int offset = 0) =>
+        cards.GroupBy(c => _data.Cards[c].Rarity)
+            .OrderBy(g => g.Key)
+            .Select(g => ($"{g.Key} cards", g.OrderBy(_data.CardName, StringComparer.CurrentCultureIgnoreCase).Select(c => (offset + c, Visuals.Card(_data, c)))));
+
     // A scrolling grid of tiles of which one can be picked, with a box that narrows long lists.
+    // The tiles can come in groups, each under a heading.
     private sealed class IconGrid
     {
         private readonly Action<Visual> _hover;
         private readonly bool _optional;
         private readonly LineEdit _search = new() { PlaceholderText = "Search by name", ClearButtonEnabled = true };
-        private readonly HFlowContainer _flow = Visuals.Flow();
-        private readonly List<(Button Tile, string Name)> _tiles = [];
+        private readonly VBoxContainer _groups = new() { SizeFlagsHorizontal = Control.SizeFlags.ExpandFill };
+        private readonly List<(Label? Heading, List<(Button Tile, string Name)> Tiles)> _shown = [];
         private ButtonGroup _group = new();
 
         public VBoxContainer Root { get; } = new() { SizeFlagsVertical = Control.SizeFlags.ExpandFill };
@@ -532,34 +542,55 @@ public sealed class FilterPanel
             _search.TextChanged += _ => Narrow();
             Root.AddChild(_search);
             ScrollContainer scroll = new() { SizeFlagsVertical = Control.SizeFlags.ExpandFill, HorizontalScrollMode = ScrollContainer.ScrollMode.Disabled };
-            scroll.AddChild(_flow);
+            _groups.AddThemeConstantOverride("separation", 8);
+            scroll.AddChild(_groups);
             Root.AddChild(scroll);
         }
 
-        public void SetItems(IEnumerable<(int Id, Visual Visual)> items)
+        public void SetItems(IEnumerable<(int Id, Visual Visual)> items) => SetGroups([("", items)]);
+
+        public void SetGroups(IEnumerable<(string Heading, IEnumerable<(int Id, Visual Visual)> Items)> groups)
         {
-            Visuals.Clear(_flow);
-            _tiles.Clear();
+            Visuals.Clear(_groups);
+            _shown.Clear();
             _group = new ButtonGroup { AllowUnpress = _optional };
             bool hadSelection = Selected != null;
             Selected = null;
+            HashSet<int> seen = [];
 
-            foreach ((int id, Visual visual) in items.DistinctBy(i => i.Id))
+            foreach ((string heading, IEnumerable<(int Id, Visual Visual)> items) in groups)
             {
-                Button tile = Visuals.Tile(visual, _hover);
-                tile.ToggleMode = true;
-                tile.ButtonGroup = _group;
-                tile.Toggled += on =>
+                List<(Button Tile, string Name)> tiles = [];
+                HFlowContainer flow = Visuals.Flow();
+                foreach ((int id, Visual visual) in items.Where(item => seen.Add(item.Id)))
                 {
-                    Selected = on ? id : Selected == id ? null : Selected;
-                    Changed?.Invoke();
-                };
-                _flow.AddChild(tile);
-                _tiles.Add((tile, visual.Name));
+                    Button tile = Visuals.Tile(visual, _hover);
+                    tile.ToggleMode = true;
+                    tile.ButtonGroup = _group;
+                    tile.Toggled += on =>
+                    {
+                        Selected = on ? id : Selected == id ? null : Selected;
+                        Changed?.Invoke();
+                    };
+                    flow.AddChild(tile);
+                    tiles.Add((tile, visual.Name));
+                }
+
+                if (tiles.Count == 0)
+                {
+                    flow.QueueFree();
+                    continue;
+                }
+
+                Label? label = heading.Length == 0 ? null : Visuals.SectionTitle($"{heading}  ·  {tiles.Count}", 18);
+                if (label != null)
+                    _groups.AddChild(label);
+                _groups.AddChild(flow);
+                _shown.Add((label, tiles));
             }
 
             // Short lists do not need narrowing.
-            _search.Visible = _tiles.Count > 14;
+            _search.Visible = _shown.Sum(g => g.Tiles.Count) > 14;
             Narrow();
             if (hadSelection)
                 Changed?.Invoke();
@@ -568,8 +599,13 @@ public sealed class FilterPanel
         private void Narrow()
         {
             string filter = _search.Visible ? _search.Text.Trim() : "";
-            foreach ((Button tile, string name) in _tiles)
-                tile.Visible = filter.Length == 0 || name.Contains(filter, StringComparison.CurrentCultureIgnoreCase);
+            foreach ((Label? heading, List<(Button Tile, string Name)> tiles) in _shown)
+            {
+                foreach ((Button tile, string name) in tiles)
+                    tile.Visible = filter.Length == 0 || name.Contains(filter, StringComparison.CurrentCultureIgnoreCase);
+                if (heading != null)
+                    heading.Visible = tiles.Any(t => t.Tile.Visible);
+            }
         }
     }
 }

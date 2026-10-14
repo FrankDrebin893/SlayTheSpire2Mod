@@ -113,6 +113,7 @@ public sealed class GameData
     public int[] PotionOptions { get; private set; } = [];
     public int[] ColorlessCards { get; private set; } = [];
     public int[] OtherCharacterCards { get; private set; } = [];
+    private readonly Dictionary<int, string> _cardOwners = new();
     public int[] Curses { get; private set; } = [];
     public int[] BonesRelics { get; private set; } = [];
     // The cursed offers, for marking them in the pickers.
@@ -144,6 +145,9 @@ public sealed class GameData
     public string AncientName(int id) => id < 0 ? "none" : Ancients[id].Title.GetFormattedText();
     public string RelicName(int id) => id < 0 ? "?" : Relics[id].Title.GetFormattedText();
     public string CardName(int id) => Cards[id].Title;
+
+    // The character a card of another character belongs to; null for every other card.
+    public string? CardOwner(int id) => _cardOwners.GetValueOrDefault(id);
     public string PotionName(int id) => id < 0 ? "none" : Potions[id].Title.GetFormattedText();
 
     private void Export()
@@ -544,8 +548,12 @@ public sealed class GameData
         foreach (CardPoolModel pool in others)
         {
             w.WriteStartArray();
+            int first = otherCards.Count;
             WriteCardList(w, Unlocked(pool), otherCards);
             w.WriteEndArray();
+            string owner = ModelDb.AllCharacters.FirstOrDefault(c => c.CardPool == pool)?.Title.GetFormattedText() ?? "Other";
+            foreach (int card in otherCards.Skip(first))
+                _cardOwners[card] = owner;
         }
 
         w.WriteEndArray();

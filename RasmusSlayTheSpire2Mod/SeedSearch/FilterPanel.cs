@@ -512,11 +512,15 @@ public sealed class FilterPanel
     private IEnumerable<int> SlotItems(int slot, Func<ActInfo, IEnumerable<int>> pick) =>
         _data.SlotActs[slot].SelectMany(a => pick(_data.ActInfos[a])).Distinct();
 
-    // One group per rarity, by name within it. The offset tells cards apart in a grid of mixed things.
+    // One group per rarity, by name within it; cards of other characters (Kaleidoscope) are split
+    // by character first. The offset tells cards apart in a grid of mixed things.
     private IEnumerable<(string Heading, IEnumerable<(int Id, Visual Visual)> Items)> CardGroups(IEnumerable<int> cards, int offset = 0) =>
-        cards.GroupBy(c => _data.Cards[c].Rarity)
-            .OrderBy(g => g.Key)
-            .Select(g => ($"{g.Key} cards", g.OrderBy(_data.CardName, StringComparer.CurrentCultureIgnoreCase).Select(c => (offset + c, Visuals.Card(_data, c)))));
+        cards.GroupBy(_data.CardOwner)
+            .SelectMany(owner => owner
+                .GroupBy(c => _data.Cards[c].Rarity)
+                .OrderBy(g => g.Key)
+                .Select(g => (owner.Key == null ? $"{g.Key} cards" : $"{owner.Key}  ·  {g.Key}",
+                    g.OrderBy(_data.CardName, StringComparer.CurrentCultureIgnoreCase).Select(c => (offset + c, Visuals.Card(_data, c))))));
 
     // A scrolling grid of tiles of which one can be picked, with a box that narrows long lists.
     // The tiles can come in groups, each under a heading.

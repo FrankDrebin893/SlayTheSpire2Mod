@@ -3,7 +3,7 @@
   "name": "Rasmus' Seed Search & Tweaks",
   "author": "Rasmus",
   "description": "Card tweaks and a seed search. Master Planner costs 1 less energy (1 instead of 2, 0 when upgraded). The Custom Run screen gets a Search Seed button that opens a screen for finding seeds by Neow offers, bosses, events, fights, relic order, maps and the first card reward, with bookmarks for seeds and saved searches.",
-  "version": "v1.4.2",
+  "version": "v1.4.3",
   "min_game_version": "0.111.0",
   "has_pck": false,
   "has_dll": true,

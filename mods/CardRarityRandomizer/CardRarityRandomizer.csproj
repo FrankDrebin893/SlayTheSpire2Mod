@@ -1,0 +1,48 @@
+<Project Sdk="Microsoft.NET.Sdk" InitialTargets="CheckDependencyPaths">
+    <!-- Shared game path discovery, at <repo>/build/ -->
+    <Import Project="$(MSBuildThisFileDirectory)..\..\build\Sts2PathDiscovery.props"/>
+    <PropertyGroup>
+        <TargetFramework>net9.0</TargetFramework>
+        <ImplicitUsings>true</ImplicitUsings>
+        <Nullable>enable</Nullable>
+        <NoWarn>$(NoWarn);MSB3270</NoWarn>
+        <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    </PropertyGroup>
+
+    <ItemGroup>
+        <Compile Include="src/**/*.cs"/>
+    </ItemGroup>
+
+    <!-- Code-only mod: compile against the game's own assemblies, never ship them. -->
+    <ItemGroup Condition="Exists('$(Sts2DataDir)')">
+        <Reference Include="0Harmony">
+            <HintPath>$(Sts2DataDir)/0Harmony.dll</HintPath>
+            <Private>false</Private>
+        </Reference>
+        <Reference Include="sts2">
+            <HintPath>$(Sts2DataDir)/sts2.dll</HintPath>
+            <Private>false</Private>
+        </Reference>
+        <Reference Include="GodotSharp">
+            <HintPath>$(Sts2DataDir)/GodotSharp.dll</HintPath>
+            <Private>false</Private>
+        </Reference>
+    </ItemGroup>
+
+    <ItemGroup>
+        <None Include="CardRarityRandomizer.json"/>
+    </ItemGroup>
+
+    <Target Name="CheckDependencyPaths">
+        <Error
+                Text=" Slay the Spire 2 data not found at path '$(Sts2DataDir)'"
+                Condition="'$(Sts2DataDir)' == '' or !Exists('$(Sts2DataDir)')"/>
+    </Target>
+
+    <Target Name="CopyToModsFolderOnBuild" AfterTargets="PostBuildEvent">
+        <Message Text="Copying .dll .pdb and .json to mods folder." Importance="high"/>
+        <Copy SourceFiles="$(TargetPath)" DestinationFolder="$(ModsPath)$(MSBuildProjectName)/"/>
+        <Copy SourceFiles="$(AssemblyName).json" DestinationFolder="$(ModsPath)$(MSBuildProjectName)/"/>
+        <Copy SourceFiles="$(TargetDir)$(TargetName).pdb" DestinationFolder="$(ModsPath)$(MSBuildProjectName)/"/>
+    </Target>
+</Project>

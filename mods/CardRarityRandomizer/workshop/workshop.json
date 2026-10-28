@@ -2,7 +2,7 @@
   "title": "Card Rarity Randomizer",
   "description": "[h2]Every run, every card's rarity is shuffled.[/h2]\nAt the start of a run the mod swaps the rarities of cards inside each card pool. A Strike might be a Rare and Whirlwind a Common. A summary screen shows exactly what changed.\n\n[list]\n[*]Each character keeps the same number of Commons, Uncommons and Rares, only which cards they are changes\n[*]Rewards, shops and other rarity rolls follow the new rarities\n[*]Fixed for the whole run and repeatable: the same seed gives the same rarities\n[*]Basic, Ancient, Curse, Status, Quest and Event cards are left alone\n[/list]\n\n[h3]Good to know[/h3]\n[list]\n[*]Changes gameplay, so everyone in a multiplayer lobby needs the mod.\n[*]Built for game version 0.111.0. A game update can break it until the mod is updated.\n[*]No dependencies.\n[/list]\n\nUnofficial fan-made mod, not affiliated with Mega Crit.",
   "visibility": "public",
-  "changeNote": "v0.1.0: first version.",
+  "changeNote": "v0.1.0: first version. New icon, banner and preview art.",
   "tags": [],
   "dependencies": [],
   "contentDescriptors": []

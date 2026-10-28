@@ -2,7 +2,7 @@
   "title": "Card Balance",
   "description": "[h2]Small, targeted card balance changes.[/h2]\nEach change is a separate patch, listed here and in the Card Library.\n\n[h3]Changes[/h3]\n[list]\n[*][b]Master Planner[/b]: costs 1 energy instead of 2, and 0 when upgraded.\n[/list]\n\n[h3]Good to know[/h3]\n[list]\n[*]Changes gameplay, so everyone in a multiplayer lobby needs the mod.\n[*]Built for game version 0.111.0. A game update can break a patch; it then logs an error and leaves the card alone.\n[*]No dependencies.\n[/list]\n\nUnofficial fan-made mod, not affiliated with Mega Crit.",
   "visibility": "public",
-  "changeNote": "v1.0.0: First release. Master Planner costs 1 (0 upgraded). Split out of the old Seed Search & Tweaks mod.",
+  "changeNote": "v1.0.0: First release. Master Planner costs 1 (0 upgraded). Split out of the old Seed Search & Tweaks mod. New icon, banner and preview art.",
   "tags": [],
   "dependencies": [],
   "contentDescriptors": []

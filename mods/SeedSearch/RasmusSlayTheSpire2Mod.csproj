@@ -1,5 +1,5 @@
 <Project Sdk="Microsoft.NET.Sdk" InitialTargets="CheckDependencyPaths">
-    <Import Project=".\Sts2PathDiscovery.props"/>
+    <Import Project="$(MSBuildThisFileDirectory)..\..\build\Sts2PathDiscovery.props"/>
     <PropertyGroup>
         <TargetFramework>net9.0</TargetFramework>
         <ImplicitUsings>true</ImplicitUsings>
@@ -34,10 +34,10 @@
                 Condition="'$(Sts2DataDir)' == '' or !Exists('$(Sts2DataDir)')"/>
     </Target>
 
-    <!-- The Rust seed engine (../seed-engine). Windows x64 only; elsewhere, or with
+    <!-- The Rust seed engine (seed-engine/). Windows x64 only; elsewhere, or with
          /p:SkipRustBuild=true, the mod falls back to its slow C# seed search. -->
     <PropertyGroup>
-        <SeedEngineDir>$(MSBuildProjectDirectory)/../seed-engine</SeedEngineDir>
+        <SeedEngineDir>$(MSBuildProjectDirectory)/seed-engine</SeedEngineDir>
         <SeedEngineDll>$(SeedEngineDir)/target/release/sts2_seed_engine.dll</SeedEngineDll>
         <BuildSeedEngine Condition="'$(SkipRustBuild)' != 'true' And $([MSBuild]::IsOSPlatform('Windows'))">true</BuildSeedEngine>
     </PropertyGroup>

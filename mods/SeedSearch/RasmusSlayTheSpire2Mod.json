@@ -1,0 +1,12 @@
+{
+  "id": "RasmusSlayTheSpire2Mod",
+  "name": "Seed Search",
+  "author": "Rasmus",
+  "description": "Find the seed you want before the run starts. The Custom Run screen gets a Search Seed button that opens a screen for finding seeds by Neow offers, bosses, events, fights, relic order, maps and the first card reward, with bookmarks for seeds and saved searches.",
+  "version": "v2.0.0",
+  "min_game_version": "0.111.0",
+  "has_pck": false,
+  "has_dll": true,
+  "dependencies": [],
+  "affects_gameplay": true
+}

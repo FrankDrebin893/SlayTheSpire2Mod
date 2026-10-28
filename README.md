@@ -34,7 +34,7 @@ Uses Mega Crit's [ModUploader](https://github.com/megacrit/sts2-mod-uploader/rel
 3. Edit `mods/<Name>/workshop/workshop.json` (`changeNote`, `visibility`) and `image.png` (under 1 MB).
 4. `tools/ModUploader/ModUploader.exe upload -w mods/<Name>/workshop`
 
-The first upload writes `mod_id.txt`; later uploads update that item. Card Balance has not been uploaded yet and is `private` until you flip it.
+The first upload writes `mod_id.txt`; later uploads update that item. Card Balance has not been uploaded yet.
 
 ## License
 

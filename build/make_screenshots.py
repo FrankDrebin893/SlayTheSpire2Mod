@@ -205,31 +205,48 @@ def render_character_select_toggle():
     d.rounded_rectangle([80 * SS, 960 * SS, 260 * SS, 1020 * SS], 8 * SS, fill=(35, 30, 40, 255), outline=(90, 80, 100, 255), width=2 * SS)
     d.text((120 * SS, 978 * SS), "BACK", font=f_serif(22), fill=(220, 215, 230, 255))
 
-    # EMBARK BUTTON bottom right
-    ex0, ey0, ex1, ey1 = int(1540 * SS), int(940 * SS), int(1840 * SS), int(1020 * SS)
-    d.rounded_rectangle([ex0, ey0, ex1, ey1], 8 * SS, fill=(140, 40, 30, 255), outline=(255, 200, 80, 255), width=3 * SS)
-    emb_f = f_serif(28)
-    d.text((ex0 + 82 * SS, ey0 + 22 * SS), "EMBARK", font=emb_f, fill=(255, 240, 180, 255))
+    # STS2 CONFIRM / EMBARK BUTTON (Teal pill with checkmark on bottom right)
+    ex1 = W - int(40 * SS)
+    ew = int(120 * SS)
+    ex0 = ex1 - ew
+    ey0 = int(950 * SS)
+    ey1 = ey0 + int(60 * SS)
+    d.rounded_rectangle([ex0, ey0, ex1, ey1], 8 * SS, fill=(48, 105, 122, 255), outline=(135, 205, 218, 255), width=3 * SS)
+    # Checkmark symbol inside the confirm button
+    cx_mid = (ex0 + ex1) // 2
+    cy_mid = (ey0 + ey1) // 2
+    pts = [
+        (cx_mid - 20 * SS, cy_mid + 2 * SS),
+        (cx_mid - 6 * SS, cy_mid + 16 * SS),
+        (cx_mid + 22 * SS, cy_mid - 16 * SS)
+    ]
+    d.line(pts, fill=(240, 255, 255, 255), width=int(6 * SS), joint="curve")
 
-    # --- THE MOD FEATURE: Randomizer Toggle Button Right Above Embark! ---
-    tx0, ty0, tx1, ty1 = ex0, ey0 - int(64 * SS), ex1, ey0 - int(12 * SS)
-    d.rounded_rectangle([tx0, ty0, tx1, ty1], 8 * SS, fill=(65, 32, 98, 255), outline=(250, 205, 90, 255), width=3 * SS)
-    tog_f = sans(18, bold=True)
+    # --- THE MOD FEATURE: Randomizer Toggle Button Right-Aligned Above ConfirmButton! ---
+    tw = int(240 * SS)
+    th = int(42 * SS)
+    tx1 = ex1  # Right edge aligns with checkmark button right edge
+    tx0 = tx1 - tw
+    ty0 = ey0 - th - int(12 * SS)
+    ty1 = ty0 + th
+
+    d.rounded_rectangle([tx0, ty0, tx1, ty1], 8 * SS, fill=(65, 32, 98, 255), outline=(250, 205, 90, 255), width=2 * SS)
+    tog_f = sans(17, bold=True)
     tog_text = "🎲 Randomizer: ON"
     ttw = d.textlength(tog_text, font=tog_f)
-    d.text((tx0 + (int(300 * SS) - ttw) / 2, ty0 + 13 * SS), tog_text, font=tog_f, fill=(255, 240, 180, 255))
+    d.text((tx0 + (tw - ttw) / 2, ty0 + 10 * SS), tog_text, font=tog_f, fill=(255, 240, 180, 255))
 
     # Callout Arrow pointing to the toggle button
-    cx0, cy0 = tx0 - int(380 * SS), ty0 - int(80 * SS)
+    cx0, cy0 = tx0 - int(380 * SS), ty0 - int(70 * SS)
     d.rounded_rectangle([cx0, cy0, cx0 + int(350 * SS), cy0 + int(104 * SS)], 8 * SS, fill=(15, 12, 22, 245), outline=(180, 140, 240, 255), width=2 * SS)
     f_call = sans(15, bold=True)
     d.text((cx0 + 16 * SS, cy0 + 14 * SS), "✨ One-Click In-Game Toggle!", font=f_call, fill=(255, 225, 110, 255))
     d.text((cx0 + 16 * SS, cy0 + 40 * SS), "Easily enable/disable for any run right here.", font=sans(14), fill=(220, 215, 235, 255))
-    d.text((cx0 + 16 * SS, cy0 + 64 * SS), "Click to switch between ON & OFF instantly!", font=sans(14), fill=(160, 220, 255, 255))
+    d.text((cx0 + 16 * SS, cy0 + 64 * SS), "Right-aligned to never cut off on any screen!", font=sans(14), fill=(160, 220, 255, 255))
 
     # Pointer arrow from callout to button
-    d.line([(cx0 + int(350 * SS), cy0 + int(52 * SS)), (tx0 - int(10 * SS), ty0 + int(24 * SS))], fill=(200, 160, 255, 255), width=3 * SS)
-    d.polygon([(tx0 - int(8 * SS), ty0 + int(24 * SS)), (tx0 - int(24 * SS), ty0 + int(16 * SS)), (tx0 - int(24 * SS), ty0 + int(32 * SS))], fill=(250, 205, 90, 255))
+    d.line([(cx0 + int(350 * SS), cy0 + int(52 * SS)), (tx0 - int(10 * SS), ty0 + int(20 * SS))], fill=(200, 160, 255, 255), width=3 * SS)
+    d.polygon([(tx0 - int(8 * SS), ty0 + int(20 * SS)), (tx0 - int(24 * SS), ty0 + int(12 * SS)), (tx0 - int(24 * SS), ty0 + int(28 * SS))], fill=(250, 205, 90, 255))
 
     # Secondary preview of OFF state
     ox0, oy0 = cx0, cy0 + int(124 * SS)
@@ -260,22 +277,18 @@ def render_shuffled_card_rewards():
     stw = d.textlength(sub, font=f_sub)
     d.text(((W - stw) / 2, 138 * SS), sub, font=f_sub, fill=(190, 220, 255, 255))
 
-    # 3 Cards displayed side by side
     cw, ch = int(320 * SS), int(450 * SS)
     spacing = int(100 * SS)
     total_w = 3 * cw + 2 * spacing
     start_x = (W - total_w) // 2
     cards_y = int(230 * SS)
 
-    # Card 1: Strike (Promoted to RARE! Glowing gold border, 1 cost)
     c1, _ = make_card(cw, ch, (255, 205, 80), (255, 170, 30), (220, 90, 40), cost=1, seal=True, glyph="star")
     im = place(im, c1, start_x + cw // 2, cards_y + ch // 2, angle=-2)
 
-    # Card 2: Whirlwind (Demoted to COMMON! Grey border, 0 cost)
     c2, _ = make_card(cw, ch, (155, 160, 175), (120, 125, 140), (90, 95, 115), cost=0, dim=False, glyph="circle")
     im = place(im, c2, start_x + cw + spacing + cw // 2, cards_y + ch // 2, angle=0)
 
-    # Card 3: Demon Form (Swapped to UNCOMMON! Cyan/Teal border, 3 cost)
     c3, _ = make_card(cw, ch, (75, 185, 255), (45, 140, 245), (70, 60, 160), cost=3, seal=False, glyph="diamond")
     im = place(im, c3, start_x + 2 * (cw + spacing) + cw // 2, cards_y + ch // 2, angle=2)
 

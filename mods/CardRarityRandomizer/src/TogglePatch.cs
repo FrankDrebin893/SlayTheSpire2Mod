@@ -78,8 +78,9 @@ public static class TogglePatch
         {
             Name = "CardRandomizerToggleButton",
             FocusMode = Control.FocusModeEnum.None,
-            CustomMinimumSize = new Vector2(240, 42)
+            CustomMinimumSize = new Vector2(200, 38)
         };
+        button.AddThemeFontSizeOverride("font_size", 16);
 
         void Refresh()
         {
@@ -117,17 +118,39 @@ public static class TogglePatch
 
         void Place()
         {
+            var minSize = button.GetCombinedMinimumSize();
+            float btnW = Math.Max(minSize.X, 200f);
+            float btnH = Math.Max(minSize.Y, 38f);
+            button.Size = new Vector2(btnW, btnH);
+
+            float rightEdge = 1840f;
+            float topY = 920f;
+
             if (anchor != null && anchor.IsInsideTree())
             {
                 Rect2 rect = anchor.GetGlobalRect();
                 if (rect.Size.X > 0 && rect.Size.Y > 0)
                 {
-                    button.Size = new Vector2(rect.Size.X, 42);
-                    button.GlobalPosition = new Vector2(rect.Position.X, rect.Position.Y - 52);
-                    return;
+                    rightEdge = rect.End.X;
+                    topY = rect.Position.Y - btnH - 10f;
                 }
             }
-            button.Position = new Vector2(1520, 920);
+
+            // Right-align button with the right edge of the anchor (ConfirmButton)
+            float x = rightEdge - btnW;
+
+            // Ensure button does not clip off the right edge of the screen
+            float vpWidth = screen.GetViewportRect().Size.X;
+            if (vpWidth > 0)
+            {
+                if (x + btnW > vpWidth - 16f)
+                {
+                    x = vpWidth - btnW - 16f;
+                }
+                if (x < 16f) x = 16f;
+            }
+
+            button.GlobalPosition = new Vector2(x, topY);
         }
 
         if (anchor != null)
@@ -135,6 +158,16 @@ public static class TogglePatch
             anchor.ItemRectChanged += Place;
         }
         screen.VisibilityChanged += Place;
+        screen.ItemRectChanged += Place;
+
+        var vp = screen.GetViewport();
+        if (vp != null)
+        {
+            Action onSizeChanged = Place;
+            vp.SizeChanged += onSizeChanged;
+            button.TreeExiting += () => vp.SizeChanged -= onSizeChanged;
+        }
+
         Callable.From(Place).CallDeferred();
     }
 
@@ -147,7 +180,7 @@ public static class TogglePatch
         };
         box.SetBorderWidthAll(2);
         box.SetCornerRadiusAll(6);
-        box.ContentMarginLeft = box.ContentMarginRight = 14;
+        box.ContentMarginLeft = box.ContentMarginRight = 12;
         box.ContentMarginTop = box.ContentMarginBottom = 6;
         return box;
     }

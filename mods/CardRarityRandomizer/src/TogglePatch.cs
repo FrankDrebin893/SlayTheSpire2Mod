@@ -1,9 +1,14 @@
 using System.Reflection;
 using Godot;
 using HarmonyLib;
+using MegaCrit.Sts2.Core.Nodes;
 using MegaCrit.Sts2.Core.Nodes.CommonUi;
+using MegaCrit.Sts2.Core.Nodes.Screens;
+using MegaCrit.Sts2.Core.Nodes.Screens.Capstones;
+using MegaCrit.Sts2.Core.Nodes.Screens.CardLibrary;
 using MegaCrit.Sts2.Core.Nodes.Screens.CharacterSelect;
 using MegaCrit.Sts2.Core.Nodes.Screens.CustomRun;
+using MegaCrit.Sts2.Core.Runs;
 
 namespace CardRarityRandomizer;
 
@@ -67,6 +72,49 @@ public static class TogglePatch
     {
         if (inputEvent is InputEventKey { Pressed: true, Echo: false, Keycode: Key.F8 })
         {
+            OpenCompendiumCardLibrary();
+        }
+    }
+
+    public static void OpenCompendiumCardLibrary()
+    {
+        try
+        {
+            // If the capstone / compendium is currently open, close it (toggle behavior)
+            var capstone = NCapstoneContainer.Instance;
+            if (capstone?.CurrentCapstoneScreen != null)
+            {
+                capstone.Close();
+                return;
+            }
+
+            // If inside an active run, open the game's actual Card Library / Compendium
+            var run = NRun.Instance;
+            if (run?.GlobalUi?.SubmenuStack != null)
+            {
+                var stack = run.GlobalUi.SubmenuStack;
+                stack.ShowScreen(CapstoneSubmenuType.Compendium);
+                var cardLib = stack.Stack.GetSubmenuType<NCardLibrary>();
+                if (cardLib != null)
+                {
+                    var runState = (GameReflection.Get(run, "_state")
+                                   ?? GameReflection.Get(RunManager.Instance, "State")) as IRunState;
+                    if (runState != null)
+                    {
+                        cardLib.Initialize(runState);
+                    }
+                    stack.Stack.Push(cardLib);
+                    MainFile.Logger.Info("Opened Compendium Card Library via F8 hotkey.");
+                    return;
+                }
+            }
+
+            // Fallback outside of run: toggle summary overlay
+            SummaryScreen.Toggle();
+        }
+        catch (Exception e)
+        {
+            MainFile.Logger.Error($"Error opening Compendium/CardLibrary via F8: {e}");
             SummaryScreen.Toggle();
         }
     }

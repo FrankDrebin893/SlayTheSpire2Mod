@@ -96,7 +96,7 @@ public static class SummaryScreen
         var scroll = new ScrollContainer
         {
             SizeFlagsVertical = Control.SizeFlags.ExpandFill,
-            CustomMinimumSize = new Vector2(0, 440)
+            CustomMinimumSize = new Vector2(0, 430)
         };
         box.AddChild(scroll);
         var list = new VBoxContainer { SizeFlagsHorizontal = Control.SizeFlags.ExpandFill };
@@ -124,7 +124,7 @@ public static class SummaryScreen
             {
                 list.AddChild(new Label
                 {
-                    Text = "\nNo rarities changed for this run or not in an active run.\n(Press F8 during a run to inspect randomized cards.)",
+                    Text = "\nNo rarities changed for this run or not in an active run.\n(Press F8 during a run to open the Card Library / Compendium.)",
                     HorizontalAlignment = HorizontalAlignment.Center
                 });
                 return;
@@ -159,8 +159,8 @@ public static class SummaryScreen
 
                 var counts = changes.GroupBy(c => $"{c.From} -> {c.To}").OrderBy(g => g.Key).Select(g => $"{g.Key}: {g.Count()}");
                 subLabel.Text = changes.Count == 0
-                    ? "Active run has normal rarities. [Press F8 to toggle this screen anytime]"
-                    : $"{changes.Count} cards changed rarity this run.   {string.Join("   ", counts)}   [Press F8 anytime]";
+                    ? "Active run has normal rarities. [Press F8 during run to open Card Library]"
+                    : $"{changes.Count} cards changed rarity this run.   {string.Join("   ", counts)}   [F8: Card Library]";
             }
             else
             {
@@ -169,7 +169,7 @@ public static class SummaryScreen
                 toggleBtn.AddThemeStyleboxOverride("hover", MakeBox(new Color(0.18f, 0.19f, 0.22f), new Color(0.6f, 0.62f, 0.68f)));
                 toggleBtn.AddThemeColorOverride("font_color", new Color(0.7f, 0.7f, 0.7f));
 
-                subLabel.Text = "Randomizer is OFF: standard vanilla card rarities are active. [Press F8 anytime]";
+                subLabel.Text = "Randomizer is OFF: standard vanilla card rarities are active. [F8: Card Library]";
             }
 
             RefreshList();
@@ -184,10 +184,32 @@ public static class SummaryScreen
 
         UpdateView();
 
+        // Bottom action button row
+        var btnRow = new HBoxContainer { Alignment = BoxContainer.AlignmentMode.Center };
+        btnRow.AddThemeConstantOverride("separation", 16);
+        box.AddChild(btnRow);
+
+        var compendiumBtn = new Button
+        {
+            Text = "📖 Open Card Library (Compendium)",
+            CustomMinimumSize = new Vector2(300, 46),
+            FocusMode = Control.FocusModeEnum.None
+        };
+        compendiumBtn.AddThemeStyleboxOverride("normal", MakeBox(new Color(0.15f, 0.32f, 0.38f), new Color(0.4f, 0.8f, 0.85f)));
+        compendiumBtn.AddThemeStyleboxOverride("hover", MakeBox(new Color(0.2f, 0.42f, 0.5f), new Color(0.6f, 0.95f, 1f)));
+        compendiumBtn.AddThemeColorOverride("font_color", new Color(0.85f, 0.95f, 1f));
+        compendiumBtn.Pressed += () =>
+        {
+            layer.QueueFree();
+            _currentLayer = null;
+            TogglePatch.OpenCompendiumCardLibrary();
+        };
+        btnRow.AddChild(compendiumBtn);
+
         var close = new Button
         {
             Text = "Continue",
-            CustomMinimumSize = new Vector2(0, 46),
+            CustomMinimumSize = new Vector2(200, 46),
             FocusMode = Control.FocusModeEnum.None
         };
         close.Pressed += () =>
@@ -195,7 +217,7 @@ public static class SummaryScreen
             layer.QueueFree();
             _currentLayer = null;
         };
-        box.AddChild(close);
+        btnRow.AddChild(close);
 
         return layer;
     }

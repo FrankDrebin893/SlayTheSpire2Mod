@@ -44,7 +44,7 @@ The game has no official modding API, so the patches find their targets by name.
 
 ## Status
 
-This first version was written without access to the game's assemblies, so it has **not been compiled or run in game**. Check the following on first build:
+It now compiles, and the reflected names below were checked against the decompiled 0.111.0 `sts2.dll` (`RunManager.InitializeNewRun` is private, `ModelDb.AllCards`, `CardModel.Id/Rarity/Pool/Title` exist, the run seed is `RunState.Rng.StringSeed`). The Rarity patch uses a typed `ref CardRarity __result`. It has **not been run in game yet**. Still to check:
 
 - The member names it looks up by reflection: `RunManager.InitializeNewRun`, `ModelDb.AllCards`, `CardModel.Id`, `.Rarity`, `.Pool`, `.Title`, and where the run seed is found (`GameReflection.FindRunSeed`). Read them with `ilspycmd`; see the repository `CLAUDE.md`.
 - That Harmony accepts `ref object __result` on the enum-typed `Rarity` getter. If not, patch with a typed `ref CardRarity __result` and drop the `Enum.Parse`.

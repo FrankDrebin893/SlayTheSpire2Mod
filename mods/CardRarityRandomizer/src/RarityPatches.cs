@@ -39,8 +39,8 @@ public static class RarityPatches
         try { return a.GetTypes(); } catch { return Array.Empty<Type>(); }
     }
 
-    // __result is the real rarity (a CardRarity enum boxed as object when read through ref).
-    public static void RarityPostfix(object __instance, ref object __result)
+    // __result is the real rarity; Harmony needs the exact enum type for a ref result.
+    public static void RarityPostfix(object __instance, ref MegaCrit.Sts2.Core.Entities.Cards.CardRarity __result)
     {
         if (!RarityState.Active) return;
         try
@@ -49,7 +49,7 @@ public static class RarityPatches
             var id = _idProp?.GetValue(__instance);
             var entry = id == null ? null : GameReflection.Get(id, "Entry") as string;
             if (entry != null && RarityState.TryGet(entry, out var name))
-                __result = Enum.Parse(__result.GetType(), name);
+                __result = Enum.Parse<MegaCrit.Sts2.Core.Entities.Cards.CardRarity>(name);
         }
         catch (Exception e)
         {

@@ -9,6 +9,8 @@ public static class SummaryScreen
     private static readonly Color Uncommon = new(0.35f, 0.75f, 1f);
     private static readonly Color Rare = new(1f, 0.78f, 0.25f);
 
+    private static CanvasLayer? _currentLayer;
+
     private static Color ColorOf(string rarity) => rarity switch
     {
         "Rare" => Rare,
@@ -16,71 +18,200 @@ public static class SummaryScreen
         _ => Common,
     };
 
+    public static void Toggle()
+    {
+        if (_currentLayer != null && GodotObject.IsInstanceValid(_currentLayer))
+        {
+            _currentLayer.QueueFree();
+            _currentLayer = null;
+            return;
+        }
+
+        Show(RarityState.Changes);
+    }
+
     public static void Show(IReadOnlyList<RarityChange> changes)
     {
         var root = (Engine.GetMainLoop() as SceneTree)?.Root;
         if (root == null) return;
-        root.CallDeferred(Node.MethodName.AddChild, Build(changes));
+
+        if (_currentLayer != null && GodotObject.IsInstanceValid(_currentLayer))
+        {
+            _currentLayer.QueueFree();
+            _currentLayer = null;
+        }
+
+        var layer = Build(changes);
+        _currentLayer = layer;
+        root.CallDeferred(Node.MethodName.AddChild, layer);
     }
 
     private static CanvasLayer Build(IReadOnlyList<RarityChange> changes)
     {
         var layer = new CanvasLayer { Layer = 100 };
+        layer.TreeExited += () =>
+        {
+            if (_currentLayer == layer) _currentLayer = null;
+        };
 
-        var dim = new ColorRect { Color = new Color(0, 0, 0, 0.75f) };
+        var dim = new ColorRect { Color = new Color(0, 0, 0, 0.8f) };
         dim.SetAnchorsPreset(Control.LayoutPreset.FullRect);
         layer.AddChild(dim);
 
         var panel = new PanelContainer();
         panel.SetAnchorsPreset(Control.LayoutPreset.Center);
-        panel.CustomMinimumSize = new Vector2(900, 640);
+        panel.CustomMinimumSize = new Vector2(920, 680);
         panel.GrowHorizontal = Control.GrowDirection.Both;
         panel.GrowVertical = Control.GrowDirection.Both;
-        panel.Position = new Vector2(-450, -320);
+        panel.Position = new Vector2(-460, -340);
         layer.AddChild(panel);
 
         var box = new VBoxContainer();
-        box.AddThemeConstantOverride("separation", 10);
+        box.AddThemeConstantOverride("separation", 12);
         panel.AddChild(box);
 
         var title = new Label { Text = "Card Rarity Randomizer", HorizontalAlignment = HorizontalAlignment.Center };
-        title.AddThemeFontSizeOverride("font_size", 34);
+        title.AddThemeFontSizeOverride("font_size", 32);
         box.AddChild(title);
 
-        var counts = changes.GroupBy(c => $"{c.From} -> {c.To}").OrderBy(g => g.Key).Select(g => $"{g.Key}: {g.Count()}");
-        box.AddChild(new Label
-        {
-            Text = changes.Count == 0 ? "No rarities changed." : $"{changes.Count} cards changed rarity this run.   " + string.Join("   ", counts),
-            HorizontalAlignment = HorizontalAlignment.Center,
-            AutowrapMode = TextServer.AutowrapMode.WordSmart,
-        });
+        // Control / Toggle Bar
+        var controlBar = new HBoxContainer { Alignment = BoxContainer.AlignmentMode.Center };
+        controlBar.AddThemeConstantOverride("separation", 16);
+        box.AddChild(controlBar);
 
-        var scroll = new ScrollContainer { SizeFlagsVertical = Control.SizeFlags.ExpandFill, CustomMinimumSize = new Vector2(0, 480) };
+        var toggleBtn = new Button
+        {
+            CustomMinimumSize = new Vector2(360, 42),
+            FocusMode = Control.FocusModeEnum.None
+        };
+        controlBar.AddChild(toggleBtn);
+
+        var subLabel = new Label
+        {
+            HorizontalAlignment = HorizontalAlignment.Center,
+            AutowrapMode = TextServer.AutowrapMode.WordSmart
+        };
+        box.AddChild(subLabel);
+
+        var scroll = new ScrollContainer
+        {
+            SizeFlagsVertical = Control.SizeFlags.ExpandFill,
+            CustomMinimumSize = new Vector2(0, 440)
+        };
         box.AddChild(scroll);
         var list = new VBoxContainer { SizeFlagsHorizontal = Control.SizeFlags.ExpandFill };
         scroll.AddChild(list);
 
-        foreach (var pool in changes.GroupBy(c => c.Pool).OrderBy(g => g.Key))
+        void RefreshList()
         {
-            var header = new Label { Text = pool.Key.Replace("CardPool", "") };
-            header.AddThemeFontSizeOverride("font_size", 24);
-            list.AddChild(header);
-            // Biggest jumps first: Common -> Rare and Rare -> Common lead the list.
-            foreach (var c in pool.OrderByDescending(c => Math.Abs(Rank(c.To) - Rank(c.From))).ThenBy(c => c.Name))
+            foreach (var child in list.GetChildren())
             {
-                var row = new HBoxContainer();
-                row.AddChild(new Label { Text = c.Name, CustomMinimumSize = new Vector2(380, 0) });
-                row.AddChild(Colored(c.From));
-                row.AddChild(new Label { Text = "  ->  " });
-                row.AddChild(Colored(c.To));
-                list.AddChild(row);
+                list.RemoveChild(child);
+                child.QueueFree();
+            }
+
+            if (!RarityState.Active)
+            {
+                list.AddChild(new Label
+                {
+                    Text = "\n[ Mod is currently DISABLED for this run ]\n\nCards are using their default, vanilla rarities.\nClick the button above to re-enable randomized rarities.",
+                    HorizontalAlignment = HorizontalAlignment.Center
+                });
+                return;
+            }
+
+            if (changes.Count == 0)
+            {
+                list.AddChild(new Label
+                {
+                    Text = "\nNo rarities changed for this run or not in an active run.\n(Press F8 during a run to inspect randomized cards.)",
+                    HorizontalAlignment = HorizontalAlignment.Center
+                });
+                return;
+            }
+
+            foreach (var pool in changes.GroupBy(c => c.Pool).OrderBy(g => g.Key))
+            {
+                var header = new Label { Text = pool.Key.Replace("CardPool", "") };
+                header.AddThemeFontSizeOverride("font_size", 22);
+                list.AddChild(header);
+
+                foreach (var c in pool.OrderByDescending(c => Math.Abs(Rank(c.To) - Rank(c.From))).ThenBy(c => c.Name))
+                {
+                    var row = new HBoxContainer();
+                    row.AddChild(new Label { Text = c.Name, CustomMinimumSize = new Vector2(380, 0) });
+                    row.AddChild(Colored(c.From));
+                    row.AddChild(new Label { Text = "  ->  " });
+                    row.AddChild(Colored(c.To));
+                    list.AddChild(row);
+                }
             }
         }
 
-        var close = new Button { Text = "Start the run", CustomMinimumSize = new Vector2(0, 48) };
-        close.Pressed += layer.QueueFree;
+        void UpdateView()
+        {
+            if (RarityState.Active)
+            {
+                toggleBtn.Text = "🎲 Randomizer: ON  (Click to Disable)";
+                toggleBtn.AddThemeStyleboxOverride("normal", MakeBox(new Color(0.24f, 0.12f, 0.36f), new Color(0.95f, 0.78f, 0.35f)));
+                toggleBtn.AddThemeStyleboxOverride("hover", MakeBox(new Color(0.32f, 0.16f, 0.48f), new Color(1f, 0.9f, 0.5f)));
+                toggleBtn.AddThemeColorOverride("font_color", new Color(1f, 0.92f, 0.65f));
+
+                var counts = changes.GroupBy(c => $"{c.From} -> {c.To}").OrderBy(g => g.Key).Select(g => $"{g.Key}: {g.Count()}");
+                subLabel.Text = changes.Count == 0
+                    ? "Active run has normal rarities. [Press F8 to toggle this screen anytime]"
+                    : $"{changes.Count} cards changed rarity this run.   {string.Join("   ", counts)}   [Press F8 anytime]";
+            }
+            else
+            {
+                toggleBtn.Text = "🎲 Randomizer: OFF  (Click to Enable)";
+                toggleBtn.AddThemeStyleboxOverride("normal", MakeBox(new Color(0.12f, 0.13f, 0.15f), new Color(0.4f, 0.42f, 0.46f)));
+                toggleBtn.AddThemeStyleboxOverride("hover", MakeBox(new Color(0.18f, 0.19f, 0.22f), new Color(0.6f, 0.62f, 0.68f)));
+                toggleBtn.AddThemeColorOverride("font_color", new Color(0.7f, 0.7f, 0.7f));
+
+                subLabel.Text = "Randomizer is OFF: standard vanilla card rarities are active. [Press F8 anytime]";
+            }
+
+            RefreshList();
+        }
+
+        toggleBtn.Pressed += () =>
+        {
+            RarityState.Active = !RarityState.Active;
+            Settings.Enabled = RarityState.Active;
+            UpdateView();
+        };
+
+        UpdateView();
+
+        var close = new Button
+        {
+            Text = "Continue",
+            CustomMinimumSize = new Vector2(0, 46),
+            FocusMode = Control.FocusModeEnum.None
+        };
+        close.Pressed += () =>
+        {
+            layer.QueueFree();
+            _currentLayer = null;
+        };
         box.AddChild(close);
+
         return layer;
+    }
+
+    private static StyleBoxFlat MakeBox(Color fill, Color border)
+    {
+        var box = new StyleBoxFlat
+        {
+            BgColor = fill,
+            BorderColor = border
+        };
+        box.SetBorderWidthAll(2);
+        box.SetCornerRadiusAll(6);
+        box.ContentMarginLeft = box.ContentMarginRight = 14;
+        box.ContentMarginTop = box.ContentMarginBottom = 6;
+        return box;
     }
 
     private static int Rank(string rarity) => rarity switch { "Rare" => 2, "Uncommon" => 1, _ => 0 };

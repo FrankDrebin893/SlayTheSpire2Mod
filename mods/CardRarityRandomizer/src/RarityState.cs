@@ -6,8 +6,21 @@ public sealed record RarityChange(string CardId, string Name, string Pool, strin
 public static class RarityState
 {
     private static readonly Dictionary<string, string> Overrides = new();
+    private static bool _active;
 
-    public static bool Active { get; set; }
+    public static event Action? StateChanged;
+
+    public static bool Active
+    {
+        get => _active;
+        set
+        {
+            if (_active == value) return;
+            _active = value;
+            StateChanged?.Invoke();
+        }
+    }
+
     public static string? Seed { get; private set; }
     public static IReadOnlyList<RarityChange> Changes { get; private set; } = Array.Empty<RarityChange>();
 
@@ -19,6 +32,7 @@ public static class RarityState
         foreach (var c in changes) Overrides[c.CardId] = c.To;
         Seed = seed;
         Changes = changes;
+        StateChanged?.Invoke();
     }
 
     public static void Clear()
@@ -26,5 +40,7 @@ public static class RarityState
         Overrides.Clear();
         Changes = Array.Empty<RarityChange>();
         Seed = null;
+        Active = false;
+        StateChanged?.Invoke();
     }
 }

@@ -6,13 +6,13 @@ A Slay the Spire 2 mod. At the start of every run the rarity of every card is sh
 
 ## Screenshots
 
-### 1. Summary Screen (Run Start & F8 Hotkey)
-Lists every card that changed rarity this run, sorted by character pool with the biggest jumps first. Includes an on-screen toggle to enable or disable the randomizer at any time.
+### 1. Summary Screen (Run Start)
+Lists every card that changed rarity this run, sorted by character pool with the biggest jumps first. Includes quick access to open the in-game Card Library (Compendium) or start the run.
 
 ![Summary Screen](art/screenshots/1_summary_screen.png)
 
 ### 2. In-Game Toggle (Character Select & Custom Run)
-Easily toggle between randomized runs and standard vanilla runs with a single click right before embarking—no game restart required!
+Easily toggle between randomized runs and standard vanilla runs with a single click right before embarking—no game restart required! Once embarked, the setting is locked for that run to ensure game consistency.
 
 ![Character Select Toggle](art/screenshots/2_character_select_toggle.png)
 
@@ -25,11 +25,11 @@ Card rewards, shops, and rarity-based mechanics follow the new shuffled rarities
 
 ## What it does
 
-- **Easy in-game toggle:** Turn the randomizer ON or OFF directly from the Character Select screen, Custom Run screen, or during a run via the Summary Screen. No need to quit and restart the game.
+- **Easy pre-run toggle:** Turn the randomizer ON or OFF directly from the Character Select screen or Custom Run screen before embarking. No need to quit and restart the game. To prevent broken decks and inconsistent reward distributions, the setting is locked once a run begins.
 - **Shuffles inside each card pool:** Common, Uncommon and Rare cards swap rarities with other cards of the same pool, so each character keeps exactly as many Commons, Uncommons and Rares as before. Only the identities change.
 - **Leaves special cards alone:** Basic, Ancient, Curse, Status, Quest and Event cards keep their rarity.
 - **Fixed for the whole run, and repeatable:** The table comes from the run's seed, so the same seed gives the same rarities, and loading a saved run restores them. Rewards, shops and other rarity rolls follow the new rarities.
-- **In-run inspection (F8):** Press **F8** at any point during a run to view the summary screen and check what changed, or toggle the randomizer on/off on the fly.
+- **In-game Card Library hotkey (F8):** Press **F8** at any point during a run to instantly open the in-game Card Library (Compendium) and see every card with its active, randomized rarity.
 
 ## Install
 

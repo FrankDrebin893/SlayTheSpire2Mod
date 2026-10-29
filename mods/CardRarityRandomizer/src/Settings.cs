@@ -3,14 +3,13 @@ using System.Text.Json.Nodes;
 
 namespace CardRarityRandomizer;
 
-// The on/off switch, and which runs were started with it on.
+// The on/off switch for new runs, and which runs were started with it on.
 //
 // Stored in settings.json under <user data>/CardRarityRandomizer/, not in the mod folder: the
 // mod loader reads every .json in a mod folder as a manifest.
 //
-// The switch only decides for new runs. Each run's decision is recorded under its seed and start
-// time, so a saved run reloads with the rarities it started with even if the switch was flipped
-// since. A run with no record (started before this version) follows the switch.
+// The switch only decides for new runs. Each run's decision is locked in at start under its seed,
+// so a saved run reloads with the rarities it started with even if the switch was flipped since.
 public static class Settings
 {
     private const int MaxRuns = 100;
@@ -43,22 +42,25 @@ public static class Settings
         }
     }
 
-    public static string RunKey(string seed, long startTime) => $"{seed}@{startTime}";
-
-    public static void RecordRun(string key, bool randomized)
+    public static void RecordRun(string seed, bool randomized)
     {
         Load();
-        Runs.RemoveAll(r => r.Key == key);
-        Runs.Add(new(key, randomized));
+        Runs.RemoveAll(r => r.Key == seed || r.Key.StartsWith(seed + "@"));
+        Runs.Add(new(seed, randomized));
         if (Runs.Count > MaxRuns) Runs.RemoveRange(0, Runs.Count - MaxRuns);
         Save();
     }
 
-    public static bool? RecordedRun(string key)
+    public static bool? RecordedRun(string seed)
     {
         Load();
-        foreach (var r in Runs)
-            if (r.Key == key) return r.Value;
+        // Check newest records first
+        for (int i = Runs.Count - 1; i >= 0; i--)
+        {
+            var r = Runs[i];
+            if (r.Key == seed || r.Key.StartsWith(seed + "@"))
+                return r.Value;
+        }
         return null;
     }
 

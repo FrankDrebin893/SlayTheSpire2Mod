@@ -67,27 +67,19 @@ public static class SummaryScreen
         layer.AddChild(panel);
 
         var box = new VBoxContainer();
-        box.AddThemeConstantOverride("separation", 12);
+        box.AddThemeConstantOverride("separation", 14);
         panel.AddChild(box);
 
         var title = new Label { Text = "Card Rarity Randomizer", HorizontalAlignment = HorizontalAlignment.Center };
         title.AddThemeFontSizeOverride("font_size", 32);
         box.AddChild(title);
 
-        // Control / Toggle Bar
-        var controlBar = new HBoxContainer { Alignment = BoxContainer.AlignmentMode.Center };
-        controlBar.AddThemeConstantOverride("separation", 16);
-        box.AddChild(controlBar);
-
-        var toggleBtn = new Button
-        {
-            CustomMinimumSize = new Vector2(360, 42),
-            FocusMode = Control.FocusModeEnum.None
-        };
-        controlBar.AddChild(toggleBtn);
-
+        var counts = changes.GroupBy(c => $"{c.From} -> {c.To}").OrderBy(g => g.Key).Select(g => $"{g.Key}: {g.Count()}");
         var subLabel = new Label
         {
+            Text = changes.Count == 0
+                ? "Active run has normal rarities. [Press F8 during run to open Card Library]"
+                : $"{changes.Count} cards changed rarity this run.   {string.Join("   ", counts)}   [F8: Open Card Library]",
             HorizontalAlignment = HorizontalAlignment.Center,
             AutowrapMode = TextServer.AutowrapMode.WordSmart
         };
@@ -96,40 +88,22 @@ public static class SummaryScreen
         var scroll = new ScrollContainer
         {
             SizeFlagsVertical = Control.SizeFlags.ExpandFill,
-            CustomMinimumSize = new Vector2(0, 430)
+            CustomMinimumSize = new Vector2(0, 470)
         };
         box.AddChild(scroll);
         var list = new VBoxContainer { SizeFlagsHorizontal = Control.SizeFlags.ExpandFill };
         scroll.AddChild(list);
 
-        void RefreshList()
+        if (changes.Count == 0)
         {
-            foreach (var child in list.GetChildren())
+            list.AddChild(new Label
             {
-                list.RemoveChild(child);
-                child.QueueFree();
-            }
-
-            if (!RarityState.Active)
-            {
-                list.AddChild(new Label
-                {
-                    Text = "\n[ Mod is currently DISABLED for this run ]\n\nCards are using their default, vanilla rarities.\nClick the button above to re-enable randomized rarities.",
-                    HorizontalAlignment = HorizontalAlignment.Center
-                });
-                return;
-            }
-
-            if (changes.Count == 0)
-            {
-                list.AddChild(new Label
-                {
-                    Text = "\nNo rarities changed for this run or not in an active run.\n(Press F8 during a run to open the Card Library / Compendium.)",
-                    HorizontalAlignment = HorizontalAlignment.Center
-                });
-                return;
-            }
-
+                Text = "\nNo rarities changed for this run or not in an active run.\n(Press F8 during a run to open the Card Library / Compendium.)",
+                HorizontalAlignment = HorizontalAlignment.Center
+            });
+        }
+        else
+        {
             foreach (var pool in changes.GroupBy(c => c.Pool).OrderBy(g => g.Key))
             {
                 var header = new Label { Text = pool.Key.Replace("CardPool", "") };
@@ -147,42 +121,6 @@ public static class SummaryScreen
                 }
             }
         }
-
-        void UpdateView()
-        {
-            if (RarityState.Active)
-            {
-                toggleBtn.Text = "🎲 Randomizer: ON  (Click to Disable)";
-                toggleBtn.AddThemeStyleboxOverride("normal", MakeBox(new Color(0.24f, 0.12f, 0.36f), new Color(0.95f, 0.78f, 0.35f)));
-                toggleBtn.AddThemeStyleboxOverride("hover", MakeBox(new Color(0.32f, 0.16f, 0.48f), new Color(1f, 0.9f, 0.5f)));
-                toggleBtn.AddThemeColorOverride("font_color", new Color(1f, 0.92f, 0.65f));
-
-                var counts = changes.GroupBy(c => $"{c.From} -> {c.To}").OrderBy(g => g.Key).Select(g => $"{g.Key}: {g.Count()}");
-                subLabel.Text = changes.Count == 0
-                    ? "Active run has normal rarities. [Press F8 during run to open Card Library]"
-                    : $"{changes.Count} cards changed rarity this run.   {string.Join("   ", counts)}   [F8: Card Library]";
-            }
-            else
-            {
-                toggleBtn.Text = "🎲 Randomizer: OFF  (Click to Enable)";
-                toggleBtn.AddThemeStyleboxOverride("normal", MakeBox(new Color(0.12f, 0.13f, 0.15f), new Color(0.4f, 0.42f, 0.46f)));
-                toggleBtn.AddThemeStyleboxOverride("hover", MakeBox(new Color(0.18f, 0.19f, 0.22f), new Color(0.6f, 0.62f, 0.68f)));
-                toggleBtn.AddThemeColorOverride("font_color", new Color(0.7f, 0.7f, 0.7f));
-
-                subLabel.Text = "Randomizer is OFF: standard vanilla card rarities are active. [F8: Card Library]";
-            }
-
-            RefreshList();
-        }
-
-        toggleBtn.Pressed += () =>
-        {
-            RarityState.Active = !RarityState.Active;
-            Settings.Enabled = RarityState.Active;
-            UpdateView();
-        };
-
-        UpdateView();
 
         // Bottom action button row
         var btnRow = new HBoxContainer { Alignment = BoxContainer.AlignmentMode.Center };
@@ -208,7 +146,7 @@ public static class SummaryScreen
 
         var close = new Button
         {
-            Text = "Continue",
+            Text = "Start the run",
             CustomMinimumSize = new Vector2(200, 46),
             FocusMode = Control.FocusModeEnum.None
         };

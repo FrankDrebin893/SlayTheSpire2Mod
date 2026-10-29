@@ -81,12 +81,12 @@ public static class RarityPatches
         {
             RarityState.Active = false;
             var seed = GameReflection.FindRunSeed(__instance) ?? Guid.NewGuid().ToString("N");
-            var key = Settings.RunKey(seed, DateTimeOffset.UtcNow.ToUnixTimeSeconds());
 
+            // Decision is locked in at run start
             if (!Settings.Enabled)
             {
                 RarityState.Clear();
-                Settings.RecordRun(key, false);
+                Settings.RecordRun(seed, false);
                 MainFile.Logger.Info($"Card Rarity Randomizer is disabled; run '{seed}' started with standard rarities.");
                 return;
             }
@@ -101,7 +101,7 @@ public static class RarityPatches
             var changes = Randomizer.Build(entries, seed);
             RarityState.Set(seed, changes);
             RarityState.Active = true;
-            Settings.RecordRun(key, true);
+            Settings.RecordRun(seed, true);
             MainFile.Logger.Info($"Randomized {changes.Count} of {entries.Count} card rarities for seed '{seed}'.");
             SummaryScreen.Show(changes);
         }
@@ -119,13 +119,9 @@ public static class RarityPatches
             var seed = GameReflection.FindRunSeed(__instance);
             if (seed == null) return;
 
-            // If we have no record of this run, follow Settings.Enabled.
-            // If we recorded that it was disabled, stay disabled.
-            var keyPrefix = seed + "@";
-            var wasRandomized = Settings.Enabled;
-            // Check if any recorded run matches this seed
+            // Follows whether this run started with randomizer
             var recorded = Settings.RecordedRun(seed);
-            if (recorded.HasValue) wasRandomized = recorded.Value;
+            var wasRandomized = recorded ?? Settings.Enabled;
 
             if (!wasRandomized)
             {

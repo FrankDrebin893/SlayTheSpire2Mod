@@ -3,7 +3,7 @@
   "name": "Card Rarity Randomizer",
   "author": "Rasmus",
   "description": "At the start of every run, card rarities are shuffled: a Strike might be a Rare and Whirlwind a Common. The rarities stay fixed for the whole run, so rewards, shops and the card library of the run follow them, and a summary screen shows what changed.",
-  "version": "v0.1.1",
+  "version": "v0.1.2",
   "min_game_version": "0.111.0",
   "has_pck": false,
   "has_dll": true,

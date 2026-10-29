@@ -69,24 +69,14 @@ def render_summary_screen():
     tw = d.textlength(title_text, font=f_title)
     d.text(((W - tw) / 2, py0 + 26 * SS), title_text, font=f_title, fill=(255, 230, 150, 255))
 
-    # Toggle Button on the modal
-    bw, bh = int(460 * SS), int(46 * SS)
-    bx0 = (W - bw) // 2
-    by0 = py0 + int(82 * SS)
-    d.rounded_rectangle([bx0, by0, bx0 + bw, by0 + bh], 8 * SS, fill=(62, 30, 92, 255), outline=(242, 198, 90, 255), width=2 * SS)
-    f_btn = sans(19, bold=True)
-    btn_text = "🎲 Randomizer: ON  (Click to Disable)"
-    btw = d.textlength(btn_text, font=f_btn)
-    d.text(((W - btw) / 2, by0 + 10 * SS), btn_text, font=f_btn, fill=(255, 236, 170, 255))
-
     # Subtitle info
-    f_sub = sans(15)
-    sub_text = "48 cards changed rarity this run.   Common -> Rare: 6   Rare -> Common: 6   [Press F8 anytime]"
+    f_sub = sans(16)
+    sub_text = "48 cards changed rarity this run.   Common -> Rare: 6   Rare -> Common: 6   [F8: Open Card Library]"
     stw = d.textlength(sub_text, font=f_sub)
-    d.text(((W - stw) / 2, by0 + 58 * SS), sub_text, font=f_sub, fill=(190, 185, 205, 255))
+    d.text(((W - stw) / 2, py0 + 72 * SS), sub_text, font=f_sub, fill=(195, 190, 215, 255))
 
     # Inner scroll container frame
-    sx0, sy0, sx1, sy1 = px0 + int(30 * SS), by0 + int(90 * SS), px1 - int(30 * SS), py1 - int(72 * SS)
+    sx0, sy0, sx1, sy1 = px0 + int(30 * SS), py0 + int(106 * SS), px1 - int(30 * SS), py1 - int(76 * SS)
     d.rounded_rectangle([sx0, sy0, sx1, sy1], 6 * SS, fill=(13, 12, 17, 255), outline=(55, 50, 65, 255), width=1 * SS)
 
     rows = [
@@ -103,6 +93,7 @@ def render_summary_screen():
             ("Adrenaline", "Rare", "Common"),
             ("Corpse Explosion", "Rare", "Uncommon"),
             ("Blade Dance", "Common", "Rare"),
+            ("Wraith Form", "Rare", "Common"),
         ]),
         ("Defect", [
             ("Echo Form", "Rare", "Common"),
@@ -139,17 +130,29 @@ def render_summary_screen():
         curr_y += int(10 * SS)
 
     sb_x = sx1 - int(12 * SS)
-    d.rounded_rectangle([sb_x, sy0 + int(20 * SS), sb_x + int(6 * SS), sy0 + int(180 * SS)], int(3 * SS), fill=(110, 95, 140, 255))
+    d.rounded_rectangle([sb_x, sy0 + int(20 * SS), sb_x + int(6 * SS), sy0 + int(240 * SS)], int(3 * SS), fill=(110, 95, 140, 255))
 
-    # Bottom button: "Start the run"
-    cw, ch = int(320 * SS), int(46 * SS)
-    cx0 = (W - cw) // 2
-    cy0 = py1 - int(60 * SS)
-    d.rounded_rectangle([cx0, cy0, cx0 + cw, cy0 + ch], 8 * SS, fill=(35, 30, 48, 255), outline=(150, 130, 185, 255), width=2 * SS)
-    f_close = sans(18, bold=True)
-    close_text = "Start the run"
-    clw = d.textlength(close_text, font=f_close)
-    d.text(((W - clw) / 2, cy0 + int(11 * SS)), close_text, font=f_close, fill=(240, 235, 255, 255))
+    # Bottom buttons: [📖 Open Card Library (Compendium)]  [Start the run]
+    by0 = py1 - int(62 * SS)
+
+    # Button 1: Open Card Library
+    b1_w = int(320 * SS)
+    b1_h = int(46 * SS)
+    b1_x0 = (W // 2) - b1_w - int(10 * SS)
+    d.rounded_rectangle([b1_x0, by0, b1_x0 + b1_w, by0 + b1_h], 8 * SS, fill=(35, 75, 88, 255), outline=(95, 195, 215, 255), width=2 * SS)
+    f_btn = sans(17, bold=True)
+    b1_txt = "📖 Open Card Library"
+    b1_tw = d.textlength(b1_txt, font=f_btn)
+    d.text((b1_x0 + (b1_w - b1_tw) / 2, by0 + int(11 * SS)), b1_txt, font=f_btn, fill=(215, 245, 255, 255))
+
+    # Button 2: Start the run
+    b2_w = int(220 * SS)
+    b2_h = int(46 * SS)
+    b2_x0 = (W // 2) + int(10 * SS)
+    d.rounded_rectangle([b2_x0, by0, b2_x0 + b2_w, by0 + b2_h], 8 * SS, fill=(35, 30, 48, 255), outline=(150, 130, 185, 255), width=2 * SS)
+    b2_txt = "Start the run"
+    b2_tw = d.textlength(b2_txt, font=f_btn)
+    d.text((b2_x0 + (b2_w - b2_tw) / 2, by0 + int(11 * SS)), b2_txt, font=f_btn, fill=(240, 235, 255, 255))
 
     out = vignette(im, 0.35)
     return out.resize((BASE_W, BASE_H), Image.LANCZOS)
@@ -163,11 +166,9 @@ def render_character_select_toggle():
 
     d = ImageDraw.Draw(im)
 
-    # Top title: CHOOSE YOUR CHARACTER
     f_top = f_serif(36)
     d.text((80 * SS, 50 * SS), "CHOOSE YOUR CHARACTER", font=f_top, fill=(240, 220, 160, 255))
 
-    # Character icon cards on left
     char_names = ["THE IRONCLAD", "THE SILENT", "THE DEFECT", "THE NECROBINDER", "THE REGENT"]
     f_ch = f_serif(19)
     for i, name in enumerate(char_names):
@@ -179,7 +180,6 @@ def render_character_select_toggle():
         d.rounded_rectangle([bx, by, bx + int(200 * SS), by + int(120 * SS)], 8 * SS, fill=bg + (240,), outline=col + (255,), width=3 * SS if is_sel else 1 * SS)
         d.text((bx + 18 * SS, by + 48 * SS), name, font=f_ch, fill=(255, 235, 180, 255) if is_sel else (160, 150, 170, 255))
 
-    # Character info showcase panel (left/middle)
     ix, iy, iw, ih = int(80 * SS), int(290 * SS), int(540 * SS), int(480 * SS)
     d.rounded_rectangle([ix, iy, ix + iw, iy + ih], 10 * SS, fill=(18, 14, 20, 220), outline=(70, 60, 75, 255), width=2 * SS)
     d.text((ix + 30 * SS, iy + 30 * SS), "THE IRONCLAD", font=f_serif(30), fill=(255, 225, 140, 255))
@@ -195,24 +195,20 @@ def render_character_select_toggle():
     for k, line in enumerate(desc_lines):
         d.text((ix + 30 * SS, iy + (130 + k * 26) * SS), line, font=f_desc, fill=(200, 195, 210, 255))
 
-    # Ascension panel (bottom center)
     ax, ay, aw, ah = int(700 * SS), int(860 * SS), int(480 * SS), int(90 * SS)
     d.rounded_rectangle([ax, ay, ax + aw, ay + ah], 8 * SS, fill=(24, 18, 26, 230), outline=(90, 75, 105, 255), width=2 * SS)
     d.text((ax + 130 * SS, ay + 18 * SS), "ASCENSION LEVEL 10", font=f_serif(20), fill=(245, 210, 120, 255))
     d.text((ax + 100 * SS, ay + 50 * SS), "< Normal modifiers applied >", font=sans(15), fill=(160, 155, 175, 255))
 
-    # Back button bottom left
     d.rounded_rectangle([80 * SS, 960 * SS, 260 * SS, 1020 * SS], 8 * SS, fill=(35, 30, 40, 255), outline=(90, 80, 100, 255), width=2 * SS)
     d.text((120 * SS, 978 * SS), "BACK", font=f_serif(22), fill=(220, 215, 230, 255))
 
-    # STS2 CONFIRM / EMBARK BUTTON (Teal pill with checkmark on bottom right)
     ex1 = W - int(40 * SS)
     ew = int(120 * SS)
     ex0 = ex1 - ew
     ey0 = int(950 * SS)
     ey1 = ey0 + int(60 * SS)
     d.rounded_rectangle([ex0, ey0, ex1, ey1], 8 * SS, fill=(48, 105, 122, 255), outline=(135, 205, 218, 255), width=3 * SS)
-    # Checkmark symbol inside the confirm button
     cx_mid = (ex0 + ex1) // 2
     cy_mid = (ey0 + ey1) // 2
     pts = [
@@ -222,10 +218,9 @@ def render_character_select_toggle():
     ]
     d.line(pts, fill=(240, 255, 255, 255), width=int(6 * SS), joint="curve")
 
-    # --- THE MOD FEATURE: Randomizer Toggle Button Right-Aligned Above ConfirmButton! ---
     tw = int(240 * SS)
     th = int(42 * SS)
-    tx1 = ex1  # Right edge aligns with checkmark button right edge
+    tx1 = ex1
     tx0 = tx1 - tw
     ty0 = ey0 - th - int(12 * SS)
     ty1 = ty0 + th
@@ -236,19 +231,16 @@ def render_character_select_toggle():
     ttw = d.textlength(tog_text, font=tog_f)
     d.text((tx0 + (tw - ttw) / 2, ty0 + 10 * SS), tog_text, font=tog_f, fill=(255, 240, 180, 255))
 
-    # Callout Arrow pointing to the toggle button
     cx0, cy0 = tx0 - int(380 * SS), ty0 - int(70 * SS)
     d.rounded_rectangle([cx0, cy0, cx0 + int(350 * SS), cy0 + int(104 * SS)], 8 * SS, fill=(15, 12, 22, 245), outline=(180, 140, 240, 255), width=2 * SS)
     f_call = sans(15, bold=True)
-    d.text((cx0 + 16 * SS, cy0 + 14 * SS), "✨ One-Click In-Game Toggle!", font=f_call, fill=(255, 225, 110, 255))
-    d.text((cx0 + 16 * SS, cy0 + 40 * SS), "Easily enable/disable for any run right here.", font=sans(14), fill=(220, 215, 235, 255))
+    d.text((cx0 + 16 * SS, cy0 + 14 * SS), "✨ Choose Before Embarking!", font=f_call, fill=(255, 225, 110, 255))
+    d.text((cx0 + 16 * SS, cy0 + 40 * SS), "Toggle ON or OFF for your upcoming run.", font=sans(14), fill=(220, 215, 235, 255))
     d.text((cx0 + 16 * SS, cy0 + 64 * SS), "Right-aligned to never cut off on any screen!", font=sans(14), fill=(160, 220, 255, 255))
 
-    # Pointer arrow from callout to button
     d.line([(cx0 + int(350 * SS), cy0 + int(52 * SS)), (tx0 - int(10 * SS), ty0 + int(20 * SS))], fill=(200, 160, 255, 255), width=3 * SS)
     d.polygon([(tx0 - int(8 * SS), ty0 + int(20 * SS)), (tx0 - int(24 * SS), ty0 + int(12 * SS)), (tx0 - int(24 * SS), ty0 + int(28 * SS))], fill=(250, 205, 90, 255))
 
-    # Secondary preview of OFF state
     ox0, oy0 = cx0, cy0 + int(124 * SS)
     d.rounded_rectangle([ox0, oy0, ox0 + int(350 * SS), oy0 + int(64 * SS)], 6 * SS, fill=(18, 18, 22, 240), outline=(80, 85, 95, 255), width=1 * SS)
     d.rounded_rectangle([ox0 + int(12 * SS), oy0 + int(12 * SS), ox0 + int(210 * SS), oy0 + int(52 * SS)], 6 * SS, fill=(30, 32, 38, 255), outline=(95, 100, 110, 255), width=2 * SS)

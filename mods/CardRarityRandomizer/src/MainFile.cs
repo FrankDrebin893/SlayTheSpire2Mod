@@ -18,5 +18,6 @@ public static class MainFile
         // The patches look their targets up by name and log an error when a game update moved
         // them, so they are applied by hand instead of through attributes.
         RarityPatches.Apply(harmony);
+        TogglePatch.Apply(harmony);
     }
 }

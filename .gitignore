@@ -16,3 +16,9 @@ mods/*/workshop/content/
 
 # Rust build output of the seed engine
 mods/*/seed-engine/target/
+/seed-engine/
+/workshop/
+
+# Python cache
+__pycache__/
+*.pyc

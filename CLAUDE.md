@@ -15,6 +15,7 @@ mods/<Name>/                    one self-contained mod: <id>.csproj, <id>.json (
 mods/SeedSearch/                id RasmusSlayTheSpire2Mod (legacy id, kept so the existing Workshop item survives); includes seed-engine/ (Rust)
 mods/CardBalance/               id RasmusCardBalance; card tweaks (Master Planner)
 mods/CardRarityRandomizer/      third mod (randomized card rarities); follows the same layout
+mods/MapPathHighlight/          fourth mod (optimal route pathfinding & current animation on hover); follows the same layout
 ```
 
 A new mod copies `mods/CardBalance/` as a template. Commands below use `mods/SeedSearch` as the example; paths like `seed-engine/` and `workshop/` are relative to the mod folder. Workshop upload: `tools/ModUploader/ModUploader.exe upload -w mods/<Name>/workshop`. Built against game version 0.111.0. There is no official modding API, so game updates can break patches.

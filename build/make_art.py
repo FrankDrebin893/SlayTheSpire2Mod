@@ -565,6 +565,92 @@ def emblem_rarity(im, cx, cy, R):
     return im
 
 
+def emblem_path(im, cx, cy, R):
+    """A map scroll with an electric current surging up the optimal path."""
+    cx, cy, R = cx * SS, cy * SS, R * SS
+    im = glow(im, cx, cy, R * 1.6, (20, 140, 220), 0.9)
+    im = glow(im, cx, cy, R * 0.9, (120, 230, 255), 0.4)
+    tw, th = R * 1.35, R * 1.65
+    tab = Image.new("RGBA", im.size, (0, 0, 0, 0))
+    td = ImageDraw.Draw(tab)
+    x0, y0 = cx - tw / 2, cy - th / 2
+    x1, y1 = cx + tw / 2, cy + th / 2
+    td.rounded_rectangle([x0, y0, x1, y1], radius=int(R * 0.12), fill=(12, 18, 30, 245), outline=(190, 145, 65, 255), width=int(R * 0.035))
+    td.rounded_rectangle([x0 + R * 0.04, y0 + R * 0.04, x1 - R * 0.04, y1 - R * 0.04], radius=int(R * 0.09), outline=(70, 50, 25, 200), width=int(R * 0.015))
+    im = drop_shadow(im, tab, 14, (0, 12))
+    im = Image.alpha_composite(im, tab)
+
+    random.seed(42)
+    rows = 7
+    nodes = []
+    top_y, bot_y = cy - th * 0.38, cy + th * 0.38
+    for r_i in range(rows):
+        n = [3, 4, 3, 4, 3, 3, 2][r_i]
+        y = bot_y - (bot_y - top_y) * (r_i / (rows - 1))
+        xs = [cx + (i - (n - 1) / 2) * (tw * 0.28) + random.uniform(-0.04, 0.04) * tw for i in range(n)]
+        nodes.append([(x, y + random.uniform(-0.02, 0.02) * th) for x in xs])
+
+    bgpath = Image.new("RGBA", im.size, (0, 0, 0, 0))
+    bpd = ImageDraw.Draw(bgpath)
+    for r_i in range(rows - 1):
+        for a in nodes[r_i]:
+            tgt = sorted(nodes[r_i + 1], key=lambda b: abs(b[0] - a[0]))[:random.choice([1, 2])]
+            for b in tgt:
+                bpd.line([a, b], fill=(60, 90, 125, 140), width=int(R * 0.025))
+    im = Image.alpha_composite(im, bgpath)
+
+    route = [nodes[0][1], nodes[1][1], nodes[2][1], nodes[3][2], nodes[4][1], nodes[5][1], nodes[6][0]]
+    surge_glow = Image.new("RGBA", im.size, (0, 0, 0, 0))
+    sgd = ImageDraw.Draw(surge_glow)
+    sgd.line(route, fill=(30, 200, 255, 255), width=int(R * 0.08), joint="curve")
+    surge_glow = surge_glow.filter(ImageFilter.GaussianBlur(8 * SS))
+    im = Image.alpha_composite(im, surge_glow)
+
+    surge_core = Image.new("RGBA", im.size, (0, 0, 0, 0))
+    scd = ImageDraw.Draw(surge_core)
+    scd.line(route, fill=(240, 250, 255, 255), width=int(R * 0.035), joint="curve")
+    im = Image.alpha_composite(im, surge_core)
+
+    node_layer = Image.new("RGBA", im.size, (0, 0, 0, 0))
+    nd = ImageDraw.Draw(node_layer)
+    colmap = {
+        "elite": (245, 65, 55),
+        "camp": (70, 230, 130),
+        "shop": (255, 215, 60),
+        "fight": (180, 195, 215),
+    }
+    route_set = set(route)
+    for r_i, row in enumerate(nodes):
+        for p in row:
+            on_route = p in route_set
+            nr = R * 0.065 if not on_route else R * 0.082
+            if p == route[3]:
+                kind = "shop"
+            elif p == route[2] or p == route[5]:
+                kind = "elite"
+            elif p == route[4]:
+                kind = "camp"
+            else:
+                kind = "fight"
+            c = colmap[kind]
+            out_c = (255, 255, 255, 255) if on_route else (120, 140, 170, 200)
+            nd.ellipse([p[0] - nr, p[1] - nr, p[0] + nr, p[1] + nr], fill=c + (255,), outline=out_c, width=max(2, int(R * 0.02)))
+            if on_route:
+                nd.ellipse([p[0] - nr * 1.35, p[1] - nr * 1.35, p[0] + nr * 1.35, p[1] + nr * 1.35], outline=(100, 230, 255, 180), width=max(1, int(R * 0.012)))
+
+    tx, ty = route[3]
+    tr = R * 0.14
+    nd.ellipse([tx - tr, ty - tr, tx + tr, ty + tr], outline=(255, 235, 120, 255), width=int(R * 0.025))
+    im = Image.alpha_composite(im, node_layer)
+
+    sp = Image.new("RGBA", im.size, (0, 0, 0, 0))
+    spd = ImageDraw.Draw(sp)
+    for (sx, sy) in (route[1], route[4], route[6]):
+        star(spd, sx, sy, R * 0.18, (255, 255, 255, 255), 4, 0.16)
+    im = Image.alpha_composite(Image.alpha_composite(im, sp.filter(ImageFilter.GaussianBlur(5 * SS))), sp)
+    return im
+
+
 # ---------------------------------------------------------------- layouts
 MODS = {
     "SeedSearch": dict(
@@ -579,8 +665,11 @@ MODS = {
         name="CARD RARITY RANDOMIZER", icon_label="RARITY", icon_r=0.33, words=("CARD RARITY", "RANDOMIZER"), tag="EVERY RUN, A NEW ORDER",
         top=(24, 8, 40), bottom=(8, 4, 18), light=(120, 50, 170), emb=[(220, 150, 255), (255, 210, 110)], emblem=emblem_rarity, seed=3,
     ),
+    "MapPathHighlight": dict(
+        name="MAP PATH HIGHLIGHTER", icon_label="PATH", icon_r=0.32, words=("MAP PATH", "HIGHLIGHTER"), tag="OPTIMAL ROUTE PLANNER",
+        top=(6, 18, 36), bottom=(3, 8, 18), light=(25, 130, 220), emb=[(100, 220, 255), (255, 215, 80)], emblem=emblem_path, seed=4,
+    ),
 }
-
 
 def finish(im, w, h, inset, amt=1.0):
     im = frame(im, inset)

@@ -12,8 +12,8 @@ using MegaCrit.Sts2.Core.Runs;
 namespace MapPathHighlight;
 
 /// <summary>
-/// Manages the rendering, multi-branch highlighting, branch counters,
-/// and electrical current animation flowing from bottom towards top.
+/// Manages optimal path highlighting, synchronized electrical current animation,
+/// color-coded branch streams, and unified branch decision cards.
 /// </summary>
 public sealed class MapPathAnimator
 {
@@ -28,7 +28,47 @@ public sealed class MapPathAnimator
     private static readonly FieldInfo PointsContainerField = AccessTools.Field(typeof(NMapScreen), "_points");
     private static readonly FieldInfo MapPointDictField = AccessTools.Field(typeof(NMapScreen), "_mapPointDictionary");
 
-    // Stock Godot nodes for visual effects
+    public readonly record struct BranchPalette(
+        string Name,
+        Color BaseDotColor,
+        Color SurgeDotColor,
+        Color GlowColor,
+        Color CoreColor,
+        Color AccentColor,
+        string Symbol);
+
+    private static readonly BranchPalette[] Palettes =
+    [
+        new BranchPalette(
+            Name: "Cyan",
+            BaseDotColor: new Color(0.18f, 0.72f, 1.0f, 0.85f),
+            SurgeDotColor: new Color(1.0f, 1.0f, 1.0f, 1.0f),
+            GlowColor: new Color(0.18f, 0.75f, 1.0f, 0.55f),
+            CoreColor: new Color(0.92f, 0.98f, 1.0f, 0.95f),
+            AccentColor: new Color("33BFFF"),
+            Symbol: "🔵"
+        ),
+        new BranchPalette(
+            Name: "Amber",
+            BaseDotColor: new Color(1.0f, 0.78f, 0.18f, 0.85f),
+            SurgeDotColor: new Color(1.0f, 0.98f, 0.85f, 1.0f),
+            GlowColor: new Color(1.0f, 0.75f, 0.15f, 0.55f),
+            CoreColor: new Color(1.0f, 0.98f, 0.88f, 0.95f),
+            AccentColor: new Color("FFD166"),
+            Symbol: "🟡"
+        ),
+        new BranchPalette(
+            Name: "Coral",
+            BaseDotColor: new Color(1.0f, 0.35f, 0.55f, 0.85f),
+            SurgeDotColor: new Color(1.0f, 0.90f, 0.95f, 1.0f),
+            GlowColor: new Color(1.0f, 0.35f, 0.55f, 0.55f),
+            CoreColor: new Color(1.0f, 0.92f, 0.95f, 0.95f),
+            AccentColor: new Color("FF6B8B"),
+            Symbol: "🔴"
+        )
+    ];
+
+    // Stock Godot visual nodes
     private readonly List<Line2D> _glowLines = [];
     private readonly List<Line2D> _coreLines = [];
     private readonly List<PanelContainer> _branchBadges = [];
@@ -42,6 +82,8 @@ public sealed class MapPathAnimator
     private readonly List<TextureRect> _activeDots = [];
     private readonly Dictionary<TextureRect, Color> _originalModulate = [];
     private readonly Dictionary<TextureRect, Vector2> _originalScales = [];
+    private readonly Dictionary<TextureRect, Color> _dotBaseColors = [];
+    private readonly Dictionary<TextureRect, Color> _dotSurgeColors = [];
     private double _animTime;
 
     private MapPathAnimator() { }
@@ -94,15 +136,11 @@ public sealed class MapPathAnimator
 
         _animTime += delta;
 
-        // Animate electrical current surging upward along the path dots across all branches
         const float waveSpeed = 460f;   // Map Y pixels per second
         const float waveSpacing = 280f; // Pixels between surges
         const float waveWidth = 120f;   // Width of surge pulse
 
         float waveHead = (float)(_animTime * waveSpeed);
-
-        Color baseColor = new(0.18f, 0.72f, 1.0f, 0.85f); // Electric cyan
-        Color surgeColor = new(1.0f, 1.0f, 1.0f, 1.0f);   // White-hot core
 
         for (int i = 0; i < _activeDots.Count; i++)
         {
@@ -110,7 +148,6 @@ public sealed class MapPathAnimator
             if (dot == null || !GodotObject.IsInstanceValid(dot))
                 continue;
 
-            // Height on map (starts low/positive Y at bottom, rises towards negative Y at top)
             float height = 750f - dot.Position.Y;
             float dist = ((waveHead - height) % waveSpacing + waveSpacing) % waveSpacing;
             float surge = 0f;
@@ -120,6 +157,8 @@ public sealed class MapPathAnimator
                 surge = Mathf.Sin(t * Mathf.Pi);
             }
 
+            Color baseColor = _dotBaseColors.GetValueOrDefault(dot, Palettes[0].BaseDotColor);
+            Color surgeColor = _dotSurgeColors.GetValueOrDefault(dot, Palettes[0].SurgeDotColor);
             dot.Modulate = baseColor.Lerp(surgeColor, surge);
 
             if (_originalScales.TryGetValue(dot, out Vector2 origScale))
@@ -128,13 +167,18 @@ public sealed class MapPathAnimator
             }
         }
 
-        // Pulse all outer glow lines
+        // Pulse all outer glow lines with their assigned palette colors
         float glowAlpha = 0.42f + 0.18f * Mathf.Sin((float)(_animTime * 5.0));
-        Color glowCol = new(0.15f, 0.75f, 1.0f, glowAlpha);
-        foreach (Line2D glow in _glowLines)
+        for (int i = 0; i < _glowLines.Count; i++)
         {
+            Line2D glow = _glowLines[i];
             if (glow != null && GodotObject.IsInstanceValid(glow))
+            {
+                BranchPalette pal = Palettes[i % Palettes.Length];
+                Color glowCol = pal.GlowColor;
+                glowCol.A = glowAlpha;
                 glow.DefaultColor = glowCol;
+            }
         }
     }
 
@@ -143,7 +187,6 @@ public sealed class MapPathAnimator
         _currentHoveredPoint = null;
         _activeRouteSet = null;
 
-        // Restore original dot colors and scales
         foreach (var kvp in _originalModulate)
         {
             if (kvp.Key != null && GodotObject.IsInstanceValid(kvp.Key))
@@ -163,6 +206,8 @@ public sealed class MapPathAnimator
         _originalModulate.Clear();
         _originalScales.Clear();
         _activeDots.Clear();
+        _dotBaseColors.Clear();
+        _dotSurgeColors.Clear();
 
         foreach (Line2D glow in _glowLines)
         {
@@ -205,10 +250,13 @@ public sealed class MapPathAnimator
         EnsureLineCount(pathsContainer, routeSet.Routes.Count);
 
         HashSet<TextureRect> uniqueDots = [];
+        Dictionary<TextureRect, int> dotRouteCount = [];
+        Dictionary<TextureRect, int> dotFirstRoute = [];
 
         for (int rIdx = 0; rIdx < routeSet.Routes.Count; rIdx++)
         {
             OptimalRoute route = routeSet.Routes[rIdx];
+            BranchPalette pal = Palettes[rIdx % Palettes.Length];
             List<Vector2> linePoints = [];
 
             for (int i = 0; i < route.FullPath.Count - 1; i++)
@@ -233,6 +281,10 @@ public sealed class MapPathAnimator
                             _activeDots.Add(dot);
                         }
 
+                        dotRouteCount[dot] = dotRouteCount.GetValueOrDefault(dot, 0) + 1;
+                        if (!dotFirstRoute.ContainsKey(dot))
+                            dotFirstRoute[dot] = rIdx;
+
                         linePoints.Add(dot.Position + (dot.Size * 0.5f));
                     }
                 }
@@ -242,14 +294,37 @@ public sealed class MapPathAnimator
             {
                 Vector2[] pts = linePoints.ToArray();
                 if (rIdx < _glowLines.Count)
+                {
                     _glowLines[rIdx].Points = pts;
+                    _glowLines[rIdx].DefaultColor = pal.GlowColor;
+                }
                 if (rIdx < _coreLines.Count)
+                {
                     _coreLines[rIdx].Points = pts;
+                    _coreLines[rIdx].DefaultColor = pal.CoreColor;
+                }
             }
         }
 
-        // Always display counter badges for all highlighted routes (single or multiple branches)
-        // with intelligent collision avoidance to guarantee no overlapping badges or obscured nodes.
+        // Color dots: shared trunk dots get bright cyan-white, branch dots get their distinct route hue
+        foreach (TextureRect dot in _activeDots)
+        {
+            int count = dotRouteCount.GetValueOrDefault(dot, 1);
+            if (count > 1)
+            {
+                _dotBaseColors[dot] = new Color(0.20f, 0.85f, 1.0f, 0.90f);
+                _dotSurgeColors[dot] = new Color(1.0f, 1.0f, 1.0f, 1.0f);
+            }
+            else
+            {
+                int rIdx = dotFirstRoute.GetValueOrDefault(dot, 0);
+                BranchPalette pal = Palettes[rIdx % Palettes.Length];
+                _dotBaseColors[dot] = pal.BaseDotColor;
+                _dotSurgeColors[dot] = pal.SurgeDotColor;
+            }
+        }
+
+        // Present counter badges in active screen vision directly adjacent to the hovered node
         if (pointsContainer != null && GodotObject.IsInstanceValid(pointsContainer) && pointDict != null)
         {
             PlaceBadges(pointsContainer, pointDict, routeSet);
@@ -284,7 +359,7 @@ public sealed class MapPathAnimator
         if (distinctScoreRoutes.Count == 0)
             return;
 
-        // Check immediate horizontal neighbors to avoid placing over adjacent nodes
+        // Check horizontal clearance against adjacent column nodes
         bool hasRightNeighbor = false;
         bool hasLeftNeighbor = false;
         foreach (var kvp in pointDict)
@@ -297,160 +372,313 @@ public sealed class MapPathAnimator
             if (dy < 42f)
             {
                 float dx = mapPointNode.Position.X - center.X;
-                if (dx > 0f && dx < 190f) hasRightNeighbor = true;
-                if (dx < 0f && dx > -190f) hasLeftNeighbor = true;
+                if (dx > 0f && dx < 200f) hasRightNeighbor = true;
+                if (dx < 0f && dx > -200f) hasLeftNeighbor = true;
             }
         }
+
+        PanelContainer container;
+        if (routeSet.HasDistinctScores && distinctScoreRoutes.Count > 1)
+        {
+            // Concept 4: Unified Multi-Branch Decision Card
+            container = CreateUnifiedBranchCard(routeSet, distinctScoreRoutes);
+        }
+        else
+        {
+            // Single compact badge
+            OptimalRoute primaryRoute = distinctScoreRoutes[0];
+            int tiedCount = routeSet.Routes.Count;
+            container = CreateSingleBadge(primaryRoute, tiedCount);
+        }
+
+        pointsContainer.AddChildSafely(container);
+        _branchBadges.Add(container);
+
+        container.ResetSize();
+        Vector2 minSize = container.GetCombinedMinimumSize();
+        float cardWidth = Math.Max(minSize.X, 150f);
+        float cardHeight = Math.Max(minSize.Y, 28f);
 
         const float gapX = 46f;
         const float gapY = 46f;
 
-        List<Rect2> placedBadgeRects = [];
+        List<Vector2> candidateSlots = [];
+        bool preferRight = center.X < -50f;
 
-        for (int i = 0; i < distinctScoreRoutes.Count; i++)
+        if (preferRight && !hasRightNeighbor && center.X + gapX + cardWidth <= 460f)
+            candidateSlots.Add(new Vector2(center.X + gapX, center.Y - cardHeight * 0.5f));
+        else if (!preferRight && !hasLeftNeighbor && center.X - gapX - cardWidth >= -560f)
+            candidateSlots.Add(new Vector2(center.X - gapX - cardWidth, center.Y - cardHeight * 0.5f));
+
+        // Vertical slots (always wide open between rows)
+        candidateSlots.Add(new Vector2(center.X - cardWidth * 0.5f, center.Y - gapY - cardHeight));
+        candidateSlots.Add(new Vector2(center.X - cardWidth * 0.5f, center.Y + gapY));
+
+        // Opposite horizontal slot
+        if (preferRight)
         {
-            OptimalRoute route = distinctScoreRoutes[i];
-            PanelContainer badge = CreateBranchBadge(route);
-            pointsContainer.AddChildSafely(badge);
-            _branchBadges.Add(badge);
-
-            badge.ResetSize();
-            Vector2 minSize = badge.GetCombinedMinimumSize();
-            float badgeWidth = Math.Max(minSize.X, EstimateBadgeWidth(route));
-            float badgeHeight = Math.Max(minSize.Y, 28f);
-            Vector2 badgeSize = new(badgeWidth, badgeHeight);
-
-            List<Vector2> slots = [];
-            bool preferRight = center.X < -50f;
-
-            if (distinctScoreRoutes.Count == 1)
-            {
-                // Single badge: pick preferred side, or vertical if horizontal neighbor is close
-                if (preferRight && !hasRightNeighbor && center.X + gapX + badgeWidth <= 460f)
-                {
-                    slots.Add(new Vector2(center.X + gapX, center.Y - badgeHeight * 0.5f));
-                }
-                else if (!preferRight && !hasLeftNeighbor && center.X - gapX - badgeWidth >= -560f)
-                {
-                    slots.Add(new Vector2(center.X - gapX - badgeWidth, center.Y - badgeHeight * 0.5f));
-                }
-
-                slots.Add(new Vector2(center.X - badgeWidth * 0.5f, center.Y - gapY - badgeHeight));
-                slots.Add(new Vector2(center.X - badgeWidth * 0.5f, center.Y + gapY));
-
-                if (preferRight)
-                {
-                    if (!hasLeftNeighbor && center.X - gapX - badgeWidth >= -560f)
-                        slots.Add(new Vector2(center.X - gapX - badgeWidth, center.Y - badgeHeight * 0.5f));
-                }
-                else
-                {
-                    if (!hasRightNeighbor && center.X + gapX + badgeWidth <= 460f)
-                        slots.Add(new Vector2(center.X + gapX, center.Y - badgeHeight * 0.5f));
-                }
-            }
-            else
-            {
-                // Multi-badge (distinct trade-offs): place in opposite cardinal slots around targetPoint
-                if (i == 0)
-                {
-                    if (preferRight && !hasRightNeighbor && center.X + gapX + badgeWidth <= 460f)
-                        slots.Add(new Vector2(center.X + gapX, center.Y - badgeHeight * 0.5f));
-                    else if (!preferRight && !hasLeftNeighbor && center.X - gapX - badgeWidth >= -560f)
-                        slots.Add(new Vector2(center.X - gapX - badgeWidth, center.Y - badgeHeight * 0.5f));
-                    else
-                        slots.Add(new Vector2(center.X - badgeWidth * 0.5f, center.Y - gapY - badgeHeight));
-                }
-                else if (i == 1)
-                {
-                    if (preferRight && !hasLeftNeighbor && center.X - gapX - badgeWidth >= -560f)
-                        slots.Add(new Vector2(center.X - gapX - badgeWidth, center.Y - badgeHeight * 0.5f));
-                    else if (!preferRight && !hasRightNeighbor && center.X + gapX + badgeWidth <= 460f)
-                        slots.Add(new Vector2(center.X + gapX, center.Y - badgeHeight * 0.5f));
-                    else
-                        slots.Add(new Vector2(center.X - badgeWidth * 0.5f, center.Y - gapY - badgeHeight));
-                }
-                else
-                {
-                    slots.Add(new Vector2(center.X - badgeWidth * 0.5f, center.Y - gapY - badgeHeight));
-                    slots.Add(new Vector2(center.X - badgeWidth * 0.5f, center.Y + gapY));
-                }
-
-                // Fallback slots
-                slots.Add(new Vector2(center.X - badgeWidth * 0.5f, center.Y - gapY - badgeHeight));
-                slots.Add(new Vector2(center.X - badgeWidth * 0.5f, center.Y + gapY));
-                slots.Add(new Vector2(center.X + gapX, center.Y - badgeHeight * 0.5f));
-                slots.Add(new Vector2(center.X - gapX - badgeWidth, center.Y - badgeHeight * 0.5f));
-            }
-
-            Vector2 chosenPos = slots[0];
-            foreach (Vector2 slotPos in slots)
-            {
-                Rect2 candidateRect = new(slotPos, badgeSize);
-                bool collides = false;
-                foreach (Rect2 placed in placedBadgeRects)
-                {
-                    if (Overlaps(candidateRect, placed, 8f))
-                    {
-                        collides = true;
-                        break;
-                    }
-                }
-                if (!collides)
-                {
-                    chosenPos = slotPos;
-                    break;
-                }
-            }
-
-            badge.Position = chosenPos;
-            placedBadgeRects.Add(new Rect2(chosenPos, badgeSize));
+            if (!hasLeftNeighbor && center.X - gapX - cardWidth >= -560f)
+                candidateSlots.Add(new Vector2(center.X - gapX - cardWidth, center.Y - cardHeight * 0.5f));
         }
+        else
+        {
+            if (!hasRightNeighbor && center.X + gapX + cardWidth <= 460f)
+                candidateSlots.Add(new Vector2(center.X + gapX, center.Y - cardHeight * 0.5f));
+        }
+
+        Vector2 bestPos = candidateSlots.FirstOrDefault();
+        if (bestPos == Vector2.Zero && candidateSlots.Count == 0)
+        {
+            bestPos = preferRight
+                ? new Vector2(center.X + gapX, center.Y - cardHeight * 0.5f)
+                : new Vector2(center.X - gapX - cardWidth, center.Y - cardHeight * 0.5f);
+        }
+
+        container.Position = bestPos;
     }
 
-    private static bool Overlaps(Rect2 a, Rect2 b, float padding)
+    private PanelContainer CreateUnifiedBranchCard(OptimalRouteSet routeSet, List<OptimalRoute> distinctRoutes)
     {
-        float aMinX = a.Position.X - padding;
-        float aMaxX = a.Position.X + a.Size.X + padding;
-        float aMinY = a.Position.Y - padding;
-        float aMaxY = a.Position.Y + a.Size.Y + padding;
+        PanelContainer card = new()
+        {
+            Name = "UnifiedBranchCard",
+            MouseFilter = Control.MouseFilterEnum.Ignore
+        };
 
-        float bMinX = b.Position.X;
-        float bMaxX = b.Position.X + b.Size.X;
-        float bMinY = b.Position.Y;
-        float bMaxY = b.Position.Y + b.Size.Y;
+        StyleBoxFlat style = new()
+        {
+            BgColor = new Color(0.06f, 0.08f, 0.12f, 0.95f),
+            BorderColor = new Color(0.20f, 0.75f, 1.0f, 0.85f),
+            BorderWidthLeft = 1,
+            BorderWidthRight = 1,
+            BorderWidthTop = 1,
+            BorderWidthBottom = 1,
+            CornerRadiusTopLeft = 8,
+            CornerRadiusTopRight = 8,
+            CornerRadiusBottomLeft = 8,
+            CornerRadiusBottomRight = 8,
+            ContentMarginLeft = 12,
+            ContentMarginRight = 12,
+            ContentMarginTop = 7,
+            ContentMarginBottom = 7
+        };
+        card.AddThemeStyleboxOverride("panel", style);
 
-        return aMinX < bMaxX && aMaxX > bMinX && aMinY < bMaxY && aMaxY > bMinY;
+        VBoxContainer vbox = new()
+        {
+            MouseFilter = Control.MouseFilterEnum.Ignore
+        };
+        vbox.AddThemeConstantOverride("separation", 5);
+        card.AddChildSafely(vbox);
+
+        // Header with fork status
+        HBoxContainer header = new() { MouseFilter = Control.MouseFilterEnum.Ignore };
+        header.AddThemeConstantOverride("separation", 6);
+        vbox.AddChildSafely(header);
+
+        Label icon = new()
+        {
+            Text = "⚡",
+            MouseFilter = Control.MouseFilterEnum.Ignore
+        };
+        icon.AddThemeColorOverride("font_color", new Color(1.0f, 0.85f, 0.2f));
+        icon.AddThemeFontSizeOverride("font_size", 13);
+        header.AddChildSafely(icon);
+
+        Label title = new()
+        {
+            Text = $"{routeSet.MaxHighValueCount} High-Value Rooms",
+            MouseFilter = Control.MouseFilterEnum.Ignore
+        };
+        title.AddThemeColorOverride("font_color", new Color("4DD0E1"));
+        title.AddThemeFontSizeOverride("font_size", 13);
+        header.AddChildSafely(title);
+
+        if (!string.IsNullOrEmpty(routeSet.ForkDescription))
+        {
+            Label bullet = new() { Text = "•", MouseFilter = Control.MouseFilterEnum.Ignore };
+            bullet.AddThemeColorOverride("font_color", new Color(0.5f, 0.6f, 0.7f));
+            bullet.AddThemeFontSizeOverride("font_size", 12);
+            header.AddChildSafely(bullet);
+
+            Label fork = new()
+            {
+                Text = routeSet.ForkDescription,
+                MouseFilter = Control.MouseFilterEnum.Ignore
+            };
+            fork.AddThemeColorOverride("font_color", new Color("D0D5E0"));
+            fork.AddThemeFontSizeOverride("font_size", 12);
+            header.AddChildSafely(fork);
+        }
+
+        // Divider
+        ColorRect divider = new()
+        {
+            CustomMinimumSize = new Vector2(0, 1),
+            Color = new Color(0.2f, 0.35f, 0.5f, 0.45f),
+            MouseFilter = Control.MouseFilterEnum.Ignore
+        };
+        vbox.AddChildSafely(divider);
+
+        // Branch trade-off rows
+        for (int i = 0; i < distinctRoutes.Count; i++)
+        {
+            OptimalRoute r = distinctRoutes[i];
+            BranchPalette pal = Palettes[i % Palettes.Length];
+
+            HBoxContainer row = new() { MouseFilter = Control.MouseFilterEnum.Ignore };
+            row.AddThemeConstantOverride("separation", 5);
+            vbox.AddChildSafely(row);
+
+            Label symbol = new()
+            {
+                Text = pal.Symbol,
+                MouseFilter = Control.MouseFilterEnum.Ignore
+            };
+            symbol.AddThemeFontSizeOverride("font_size", 11);
+            row.AddChildSafely(symbol);
+
+            Label name = new()
+            {
+                Text = $"{pal.Name}:",
+                MouseFilter = Control.MouseFilterEnum.Ignore
+            };
+            name.AddThemeColorOverride("font_color", pal.AccentColor);
+            name.AddThemeFontSizeOverride("font_size", 13);
+            row.AddChildSafely(name);
+
+            AddScoreLabelsToContainer(row, r.Score);
+        }
+
+        return card;
     }
 
-    private static float EstimateBadgeWidth(OptimalRoute route)
+    private PanelContainer CreateSingleBadge(OptimalRoute route, int tiedCount)
     {
-        float width = 24f;
-        int items = 0;
-        if (route.Score.Elites > 0)
+        PanelContainer badge = new()
         {
-            string text = $"{route.Score.Elites} Elite" + (route.Score.Elites > 1 ? "s" : "");
-            width += text.Length * 8.5f;
-            items++;
-        }
-        if (route.Score.RestSites > 0)
+            Name = "SinglePathBadge",
+            MouseFilter = Control.MouseFilterEnum.Ignore
+        };
+
+        StyleBoxFlat style = new()
         {
-            string text = $"{route.Score.RestSites} Camp" + (route.Score.RestSites > 1 ? "s" : "");
-            width += text.Length * 8.5f + (items > 0 ? 16f : 0f);
-            items++;
-        }
-        if (route.Score.Shops > 0)
+            BgColor = new Color(0.06f, 0.08f, 0.12f, 0.94f),
+            BorderColor = new Color(0.2f, 0.75f, 1.0f, 0.85f),
+            BorderWidthLeft = 1,
+            BorderWidthRight = 1,
+            BorderWidthTop = 1,
+            BorderWidthBottom = 1,
+            CornerRadiusTopLeft = 6,
+            CornerRadiusTopRight = 6,
+            CornerRadiusBottomLeft = 6,
+            CornerRadiusBottomRight = 6,
+            ContentMarginLeft = 8,
+            ContentMarginRight = 8,
+            ContentMarginTop = 4,
+            ContentMarginBottom = 4
+        };
+        badge.AddThemeStyleboxOverride("panel", style);
+
+        HBoxContainer hbox = new()
         {
-            string text = $"{route.Score.Shops} Shop" + (route.Score.Shops > 1 ? "s" : "");
-            width += text.Length * 8.5f + (items > 0 ? 16f : 0f);
-            items++;
-        }
-        if (items == 0)
+            MouseFilter = Control.MouseFilterEnum.Ignore
+        };
+        hbox.AddThemeConstantOverride("separation", 5);
+        badge.AddChildSafely(hbox);
+
+        AddScoreLabelsToContainer(hbox, route.Score);
+
+        if (tiedCount > 1)
         {
-            string text = $"{route.Score.Monsters} Fights";
-            width += text.Length * 8.5f;
+            Label bullet = new() { Text = "•", MouseFilter = Control.MouseFilterEnum.Ignore };
+            bullet.AddThemeColorOverride("font_color", new Color(0.5f, 0.6f, 0.7f));
+            bullet.AddThemeFontSizeOverride("font_size", 13);
+            hbox.AddChildSafely(bullet);
+
+            Label tiedLabel = new()
+            {
+                Text = $"{tiedCount} Equal Paths",
+                MouseFilter = Control.MouseFilterEnum.Ignore
+            };
+            tiedLabel.AddThemeColorOverride("font_color", new Color("4DD0E1"));
+            tiedLabel.AddThemeFontSizeOverride("font_size", 13);
+            hbox.AddChildSafely(tiedLabel);
         }
-        return Math.Max(width, 110f);
+
+        return badge;
+    }
+
+    private static void AddScoreLabelsToContainer(HBoxContainer hbox, RouteScore score)
+    {
+        bool hasItem = false;
+
+        if (score.Elites > 0)
+        {
+            Label eliteLabel = new()
+            {
+                Text = $"{score.Elites} Elite" + (score.Elites > 1 ? "s" : ""),
+                MouseFilter = Control.MouseFilterEnum.Ignore
+            };
+            eliteLabel.AddThemeColorOverride("font_color", new Color("FF6B6B"));
+            eliteLabel.AddThemeFontSizeOverride("font_size", 13);
+            hbox.AddChildSafely(eliteLabel);
+            hasItem = true;
+        }
+
+        if (score.RestSites > 0)
+        {
+            if (hasItem)
+            {
+                Label bullet = new() { Text = "•", MouseFilter = Control.MouseFilterEnum.Ignore };
+                bullet.AddThemeColorOverride("font_color", new Color(0.6f, 0.6f, 0.7f));
+                bullet.AddThemeFontSizeOverride("font_size", 13);
+                hbox.AddChildSafely(bullet);
+            }
+
+            Label campLabel = new()
+            {
+                Text = $"{score.RestSites} Camp" + (score.RestSites > 1 ? "s" : ""),
+                MouseFilter = Control.MouseFilterEnum.Ignore
+            };
+            campLabel.AddThemeColorOverride("font_color", new Color("51CF66"));
+            campLabel.AddThemeFontSizeOverride("font_size", 13);
+            hbox.AddChildSafely(campLabel);
+            hasItem = true;
+        }
+
+        if (score.Shops > 0)
+        {
+            if (hasItem)
+            {
+                Label bullet = new() { Text = "•", MouseFilter = Control.MouseFilterEnum.Ignore };
+                bullet.AddThemeColorOverride("font_color", new Color(0.6f, 0.6f, 0.7f));
+                bullet.AddThemeFontSizeOverride("font_size", 13);
+                hbox.AddChildSafely(bullet);
+            }
+
+            Label shopLabel = new()
+            {
+                Text = $"{score.Shops} Shop" + (score.Shops > 1 ? "s" : ""),
+                MouseFilter = Control.MouseFilterEnum.Ignore
+            };
+            shopLabel.AddThemeColorOverride("font_color", new Color("FCC419"));
+            shopLabel.AddThemeFontSizeOverride("font_size", 13);
+            hbox.AddChildSafely(shopLabel);
+            hasItem = true;
+        }
+
+        if (!hasItem)
+        {
+            Label fightLabel = new()
+            {
+                Text = $"{score.Monsters} Fights",
+                MouseFilter = Control.MouseFilterEnum.Ignore
+            };
+            fightLabel.AddThemeColorOverride("font_color", new Color(0.85f, 0.85f, 0.9f));
+            fightLabel.AddThemeFontSizeOverride("font_size", 13);
+            hbox.AddChildSafely(fightLabel);
+        }
     }
 
     private void EnsureLineCount(Control pathsContainer, int requiredCount)
@@ -483,112 +711,6 @@ public sealed class MapPathAnimator
             pathsContainer.AddChildSafely(core);
             _coreLines.Add(core);
         }
-    }
-
-    private PanelContainer CreateBranchBadge(OptimalRoute route)
-    {
-        PanelContainer badge = new()
-        {
-            Name = "BranchBadge",
-            MouseFilter = Control.MouseFilterEnum.Ignore
-        };
-
-        StyleBoxFlat style = new()
-        {
-            BgColor = new Color(0.06f, 0.08f, 0.12f, 0.94f),
-            BorderColor = new Color(0.2f, 0.75f, 1.0f, 0.85f),
-            BorderWidthLeft = 1,
-            BorderWidthRight = 1,
-            BorderWidthTop = 1,
-            BorderWidthBottom = 1,
-            CornerRadiusTopLeft = 6,
-            CornerRadiusTopRight = 6,
-            CornerRadiusBottomLeft = 6,
-            CornerRadiusBottomRight = 6,
-            ContentMarginLeft = 8,
-            ContentMarginRight = 8,
-            ContentMarginTop = 4,
-            ContentMarginBottom = 4
-        };
-        badge.AddThemeStyleboxOverride("panel", style);
-
-        HBoxContainer hbox = new()
-        {
-            MouseFilter = Control.MouseFilterEnum.Ignore
-        };
-        hbox.AddThemeConstantOverride("separation", 5);
-        badge.AddChildSafely(hbox);
-
-        bool hasItem = false;
-
-        if (route.Score.Elites > 0)
-        {
-            Label eliteLabel = new()
-            {
-                Text = $"{route.Score.Elites} Elite" + (route.Score.Elites > 1 ? "s" : ""),
-                MouseFilter = Control.MouseFilterEnum.Ignore
-            };
-            eliteLabel.AddThemeColorOverride("font_color", new Color("FF6B6B"));
-            eliteLabel.AddThemeFontSizeOverride("font_size", 14);
-            hbox.AddChildSafely(eliteLabel);
-            hasItem = true;
-        }
-
-        if (route.Score.RestSites > 0)
-        {
-            if (hasItem)
-            {
-                Label bullet = new() { Text = "•", MouseFilter = Control.MouseFilterEnum.Ignore };
-                bullet.AddThemeColorOverride("font_color", new Color(0.6f, 0.6f, 0.7f));
-                bullet.AddThemeFontSizeOverride("font_size", 14);
-                hbox.AddChildSafely(bullet);
-            }
-
-            Label campLabel = new()
-            {
-                Text = $"{route.Score.RestSites} Camp" + (route.Score.RestSites > 1 ? "s" : ""),
-                MouseFilter = Control.MouseFilterEnum.Ignore
-            };
-            campLabel.AddThemeColorOverride("font_color", new Color("51CF66"));
-            campLabel.AddThemeFontSizeOverride("font_size", 14);
-            hbox.AddChildSafely(campLabel);
-            hasItem = true;
-        }
-
-        if (route.Score.Shops > 0)
-        {
-            if (hasItem)
-            {
-                Label bullet = new() { Text = "•", MouseFilter = Control.MouseFilterEnum.Ignore };
-                bullet.AddThemeColorOverride("font_color", new Color(0.6f, 0.6f, 0.7f));
-                bullet.AddThemeFontSizeOverride("font_size", 14);
-                hbox.AddChildSafely(bullet);
-            }
-
-            Label shopLabel = new()
-            {
-                Text = $"{route.Score.Shops} Shop" + (route.Score.Shops > 1 ? "s" : ""),
-                MouseFilter = Control.MouseFilterEnum.Ignore
-            };
-            shopLabel.AddThemeColorOverride("font_color", new Color("FCC419"));
-            shopLabel.AddThemeFontSizeOverride("font_size", 14);
-            hbox.AddChildSafely(shopLabel);
-            hasItem = true;
-        }
-
-        if (!hasItem)
-        {
-            Label fightLabel = new()
-            {
-                Text = $"{route.Score.Monsters} Fights",
-                MouseFilter = Control.MouseFilterEnum.Ignore
-            };
-            fightLabel.AddThemeColorOverride("font_color", new Color(0.85f, 0.85f, 0.9f));
-            fightLabel.AddThemeFontSizeOverride("font_size", 14);
-            hbox.AddChildSafely(fightLabel);
-        }
-
-        return badge;
     }
 
     private void EnsureHudBanner(NMapScreen screen)
@@ -692,17 +814,17 @@ public sealed class MapPathAnimator
             _ => "Target"
         };
 
-        bool allSameScore = routeSet.Routes.All(r => r.Score == routeSet.Routes[0].Score);
         if (routeSet.Routes.Count > 1)
         {
-            if (allSameScore)
+            if (routeSet.HasDistinctScores)
             {
-                OptimalRoute single = routeSet.Routes[0];
-                _hudStats.Text = $"{routeSet.Routes.Count} Equal Paths Found ({routeSet.MaxHighValueCount} High-Value Rooms) • {single.Score.Elites} Elites   •   {single.Score.RestSites} Camps   •   {single.Score.Shops} Shops";
+                string forkText = !string.IsNullOrEmpty(routeSet.ForkDescription) ? $" • {routeSet.ForkDescription}" : "";
+                _hudStats.Text = $"{routeSet.Routes.Count} Equal Branches ({routeSet.MaxHighValueCount} High-Value Rooms){forkText} • See Card for Trade-offs";
             }
             else
             {
-                _hudStats.Text = $"{routeSet.Routes.Count} Equal Branches ({routeSet.MaxHighValueCount} High-Value Rooms) • See Badges for Trade-offs";
+                OptimalRoute single = routeSet.Routes[0];
+                _hudStats.Text = $"{routeSet.Routes.Count} Equal Paths Found ({routeSet.MaxHighValueCount} High-Value Rooms) • {single.Score.Elites} Elites   •   {single.Score.RestSites} Camps   •   {single.Score.Shops} Shops";
             }
         }
         else

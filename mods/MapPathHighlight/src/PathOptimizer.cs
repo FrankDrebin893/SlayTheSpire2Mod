@@ -32,6 +32,8 @@ public sealed class OptimalRouteSet
     public required MapPoint TargetPoint { get; init; }
     public required bool IsFromCurrentLocation { get; init; }
     public required int MaxHighValueCount { get; init; }
+    public string? ForkDescription { get; init; }
+    public bool HasDistinctScores { get; init; }
 }
 
 /// <summary>
@@ -185,7 +187,9 @@ public static class PathOptimizer
             Routes = routes,
             TargetPoint = targetPoint,
             IsFromCurrentLocation = isFromCurrentLocation,
-            MaxHighValueCount = routes[0].Score.TotalTargetRooms
+            MaxHighValueCount = routes[0].Score.TotalTargetRooms,
+            ForkDescription = routes.Count > 1 ? DetermineForkDescription(routes, targetPoint) : null,
+            HasDistinctScores = routes.Any(r => r.Score != routes[0].Score)
         };
     }
 
@@ -365,4 +369,55 @@ public static class PathOptimizer
     {
         return string.Join("->", r.FullPath.Select(p => $"{p.coord.col},{p.coord.row}"));
     }
-}
+
+    private static string DetermineForkDescription(List<OptimalRoute> routes, MapPoint targetPoint)
+    {
+        int targetIdx = routes[0].FullPath.IndexOf(targetPoint);
+        if (targetIdx < 0)
+            return "Multiple Equal Routes";
+
+        int minLen = routes.Min(r => r.FullPath.Count);
+        int divOutgoing = -1;
+        for (int i = targetIdx; i < minLen; i++)
+        {
+            MapPoint p0 = routes[0].FullPath[i];
+            if (routes.Any(r => r.FullPath[i] != p0))
+            {
+                divOutgoing = i;
+                break;
+            }
+        }
+
+        if (divOutgoing == targetIdx + 1)
+        {
+            return "Immediate Fork";
+        }
+        if (divOutgoing > targetIdx + 1)
+        {
+            MapPoint splitNode = routes[0].FullPath[divOutgoing - 1];
+            return $"Splits at Floor {splitNode.coord.row + 1} {GetRoomTypeName(splitNode.PointType)}";
+        }
+
+        for (int i = 0; i <= targetIdx; i++)
+        {
+            MapPoint p0 = routes[0].FullPath[i];
+            if (routes.Any(r => r.FullPath[i] != p0))
+            {
+                return $"Incoming Split (Floor {routes[0].FullPath[i].coord.row + 1})";
+            }
+        }
+
+        return "Alternate Paths";
+    }
+
+    public static string GetRoomTypeName(MapPointType type) => type switch
+    {
+        MapPointType.RestSite => "Campsite",
+        MapPointType.Shop => "Shop",
+        MapPointType.Elite => "Elite",
+        MapPointType.Treasure => "Chest",
+        MapPointType.Boss => "Boss",
+        MapPointType.Monster => "Monster",
+        _ => "Node"
+    };
+    }

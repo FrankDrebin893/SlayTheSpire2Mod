@@ -1,8 +1,8 @@
-{
+﻿{
   "id": "RasmusCardBalance",
   "name": "Card Balance",
   "author": "Rasmus",
-  "description": "Small card balance changes. Master Planner costs 1 energy instead of 2 (0 when upgraded). Calculated Gamble loses Exhaust when upgraded instead of gaining Retain.",
+  "description": "Small card balance changes. Master Planner costs 1 energy instead of 2 (0 when upgraded). Calculated Gamble loses Exhaust when upgraded instead of gaining Retain. Unceasing Top also draws when the hand holds only unplayable cards.",
   "version": "v1.0.0",
   "min_game_version": "0.111.0",
   "has_pck": false,

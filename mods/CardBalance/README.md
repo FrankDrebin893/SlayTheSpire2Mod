@@ -1,4 +1,4 @@
-<p align="center"><img src="art/banner.png" alt="Card Balance"></p>
+﻿<p align="center"><img src="art/banner.png" alt="Card Balance"></p>
 
 # Card Balance
 
@@ -9,6 +9,7 @@ Small, targeted card balance changes for Slay the Spire 2. Code-only (Harmony pa
 | Card | Change |
 | --- | --- |
 | Master Planner | Costs 1 energy instead of 2, and 0 when upgraded. |
+| Unceasing Top (relic) | Cards that can't be played (curses, statuses, etc.) don't count as a hand; if only those are left, it draws. Playable cards you just can't afford still count. |
 | Calculated Gamble | Upgrading removes Exhaust instead of adding Retain. |
 
 ## Install

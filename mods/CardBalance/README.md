@@ -9,6 +9,7 @@ Small, targeted card balance changes for Slay the Spire 2. Code-only (Harmony pa
 | Card | Change |
 | --- | --- |
 | Master Planner | Costs 1 energy instead of 2, and 0 when upgraded. |
+| Calculated Gamble | Upgrading removes Exhaust instead of adding Retain. |
 
 ## Install
 

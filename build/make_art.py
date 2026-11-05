@@ -658,7 +658,7 @@ MODS = {
         top=(8, 22, 38), bottom=(4, 8, 18), light=(30, 120, 140), emb=[(120, 230, 255), (255, 220, 140)], emblem=emblem_seed, seed=1,
     ),
     "CardBalance": dict(
-        name="CARD BALANCE", icon_label="CARD BALANCE", icon_r=0.27, icon_y=0.5, words=("CARD", "BALANCE"), tag="SMALL, CAREFUL TWEAKS",
+        name="BALANCE TWEAKS", icon_label="BALANCE TWEAKS", icon_r=0.27, icon_y=0.5, words=("BALANCE", "TWEAKS"), tag="SMALL, CAREFUL TWEAKS",
         top=(34, 8, 10), bottom=(12, 4, 8), light=(150, 40, 20), emb=[(255, 150, 60), (255, 220, 120)], emblem=emblem_balance, seed=2,
     ),
     "CardRarityRandomizer": dict(

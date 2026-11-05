@@ -1,8 +1,8 @@
-﻿<p align="center"><img src="art/banner.png" alt="Card Balance"></p>
+<p align="center"><img src="art/banner.png" alt="Balance Tweaks"></p>
 
-# Card Balance
+# Balance Tweaks
 
-Small, targeted card balance changes for Slay the Spire 2. Code-only (Harmony patches): no BaseLib, no `.pck`, no dependencies.
+Small, targeted card and relic balance changes for Slay the Spire 2. Code-only (Harmony patches): no BaseLib, no `.pck`, no dependencies.
 
 ## Changes
 
@@ -14,7 +14,7 @@ Small, targeted card balance changes for Slay the Spire 2. Code-only (Harmony pa
 
 ## Turning changes on and off
 
-Every change has its own checkbox under **Settings > General**, in the *Card Balance* section at the bottom. All are on by default. Choices are saved to <user data>/RasmusCardBalance/settings.json (not the mod folder, whose .json files are read as manifests).
+Every change has its own checkbox under **Settings > General**, in the *Balance Tweaks* section at the bottom. All are on by default. Choices are saved to <user data>/RasmusCardBalance/settings.json (not the mod folder, whose .json files are read as manifests).
 
 Changes take effect **after restarting the game**. Mods load only at startup and a disabled tweak is simply never patched in, which keeps the patches free of runtime checks (a cost, stat or keyword change applied mid-run would also leave existing cards and saved runs inconsistent). The section shows a reminder when your saved choices differ from what is active.
 

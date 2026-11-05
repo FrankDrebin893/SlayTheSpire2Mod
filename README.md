@@ -5,7 +5,7 @@ Built against game version 0.111.0. Each mod lives in its own folder under `mods
 | Mod | What it does |
 | --- | --- |
 | [Seed Search](mods/SeedSearch/) | Find seeds by Neow offers, bosses, events, fights, relic order, maps and the first card reward. A Rust engine searches millions of seeds per second. |
-| [Card Balance](mods/CardBalance/) | Small card balance changes (Master Planner costs 1, 0 upgraded). |
+| [Balance Tweaks](mods/CardBalance/) | Small card and relic balance tweaks, each toggleable in game (Master Planner, Calculated Gamble, Unceasing Top). |
 | [Card Rarity Randomizer](mods/CardRarityRandomizer/) | Shuffles card rarities for each run while preserving card stats. |
 | [Map Path Highlighter](mods/MapPathHighlight/) | Hover over any map location to highlight the optimal path maximizing Elites, Rest Sites, and Shops, animated with an upward electric current. |
 
@@ -36,7 +36,7 @@ Uses Mega Crit's [ModUploader](https://github.com/megacrit/sts2-mod-uploader/rel
 3. Edit `mods/<Name>/workshop/workshop.json` (`changeNote`, `visibility`) and `image.png` (under 1 MB).
 4. `tools/ModUploader/ModUploader.exe upload -w mods/<Name>/workshop`
 
-The first upload writes `mod_id.txt`; later uploads update that item. Card Balance has not been uploaded yet.
+The first upload writes `mod_id.txt`; later uploads update that item. Balance Tweaks (folder `mods/CardBalance`, id `RasmusCardBalance`) is Workshop item 3829021578.
 
 ## License
 

@@ -57,6 +57,6 @@ public static class MapScreenSetMapPatch
 {
     public static void Postfix()
     {
-        MapPathAnimator.Instance.ClearHighlight();
+        MapPathAnimator.Instance.OnMapReset();
     }
 }

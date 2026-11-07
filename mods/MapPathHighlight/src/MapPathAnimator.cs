@@ -129,6 +129,13 @@ public sealed class MapPathAnimator
         ClearHighlight();
     }
 
+    public void OnMapReset()
+    {
+        ClearHighlight();
+        _glowLines.Clear();
+        _coreLines.Clear();
+    }
+
     public void OnScreenProcess(double delta)
     {
         if (_activeDots.Count == 0)
@@ -209,16 +216,22 @@ public sealed class MapPathAnimator
         _dotBaseColors.Clear();
         _dotSurgeColors.Clear();
 
-        foreach (Line2D glow in _glowLines)
+        for (int i = _glowLines.Count - 1; i >= 0; i--)
         {
+            Line2D glow = _glowLines[i];
             if (glow != null && GodotObject.IsInstanceValid(glow))
                 glow.ClearPoints();
+            else
+                _glowLines.RemoveAt(i);
         }
 
-        foreach (Line2D core in _coreLines)
+        for (int i = _coreLines.Count - 1; i >= 0; i--)
         {
+            Line2D core = _coreLines[i];
             if (core != null && GodotObject.IsInstanceValid(core))
                 core.ClearPoints();
+            else
+                _coreLines.RemoveAt(i);
         }
 
         foreach (PanelContainer badge in _branchBadges)
@@ -235,102 +248,112 @@ public sealed class MapPathAnimator
 
     private void ApplyRouteSetHighlight(NMapScreen screen, OptimalRouteSet routeSet)
     {
-        EnsureHudBanner(screen);
-
-        Control? pathsContainer = PathsContainerField?.GetValue(screen) as Control;
-        Control? pointsContainer = PointsContainerField?.GetValue(screen) as Control;
-        if (pathsContainer == null || !GodotObject.IsInstanceValid(pathsContainer))
-            return;
-
-        if (PathsField?.GetValue(screen) is not Dictionary<(MapCoord, MapCoord), IReadOnlyList<TextureRect>> paths)
-            return;
-
-        Dictionary<MapCoord, NMapPoint>? pointDict = MapPointDictField?.GetValue(screen) as Dictionary<MapCoord, NMapPoint>;
-
-        EnsureLineCount(pathsContainer, routeSet.Routes.Count);
-
-        HashSet<TextureRect> uniqueDots = [];
-        Dictionary<TextureRect, int> dotRouteCount = [];
-        Dictionary<TextureRect, int> dotFirstRoute = [];
-
-        for (int rIdx = 0; rIdx < routeSet.Routes.Count; rIdx++)
+        try
         {
-            OptimalRoute route = routeSet.Routes[rIdx];
-            BranchPalette pal = Palettes[rIdx % Palettes.Length];
-            List<Vector2> linePoints = [];
+            EnsureHudBanner(screen);
 
-            for (int i = 0; i < route.FullPath.Count - 1; i++)
+            Control? pathsContainer = PathsContainerField?.GetValue(screen) as Control;
+            Control? pointsContainer = PointsContainerField?.GetValue(screen) as Control;
+            if (pathsContainer == null || !GodotObject.IsInstanceValid(pathsContainer))
+                return;
+
+            if (PathsField?.GetValue(screen) is not Dictionary<(MapCoord, MapCoord), IReadOnlyList<TextureRect>> paths)
+                return;
+
+            Dictionary<MapCoord, NMapPoint>? pointDict = MapPointDictField?.GetValue(screen) as Dictionary<MapCoord, NMapPoint>;
+
+            EnsureLineCount(pathsContainer, routeSet.Routes.Count);
+
+            HashSet<TextureRect> uniqueDots = [];
+            Dictionary<TextureRect, int> dotRouteCount = [];
+            Dictionary<TextureRect, int> dotFirstRoute = [];
+
+            for (int rIdx = 0; rIdx < routeSet.Routes.Count; rIdx++)
             {
-                MapPoint pA = route.FullPath[i];
-                MapPoint pB = route.FullPath[i + 1];
+                OptimalRoute route = routeSet.Routes[rIdx];
+                BranchPalette pal = Palettes[rIdx % Palettes.Length];
+                List<Vector2> linePoints = [];
 
-                if (paths.TryGetValue((pA.coord, pB.coord), out var segmentDots) && segmentDots != null)
+                for (int i = 0; i < route.FullPath.Count - 1; i++)
                 {
-                    foreach (TextureRect dot in segmentDots)
+                    MapPoint pA = route.FullPath[i];
+                    MapPoint pB = route.FullPath[i + 1];
+
+                    if (paths.TryGetValue((pA.coord, pB.coord), out var segmentDots) && segmentDots != null)
                     {
-                        if (dot == null || !GodotObject.IsInstanceValid(dot))
-                            continue;
-
-                        if (uniqueDots.Add(dot))
+                        foreach (TextureRect dot in segmentDots)
                         {
-                            if (!_originalModulate.ContainsKey(dot))
+                            if (dot == null || !GodotObject.IsInstanceValid(dot))
+                                continue;
+
+                            if (uniqueDots.Add(dot))
                             {
-                                _originalModulate[dot] = dot.Modulate;
-                                _originalScales[dot] = dot.Scale;
+                                if (!_originalModulate.ContainsKey(dot))
+                                {
+                                    _originalModulate[dot] = dot.Modulate;
+                                    _originalScales[dot] = dot.Scale;
+                                }
+                                _activeDots.Add(dot);
                             }
-                            _activeDots.Add(dot);
+
+                            dotRouteCount[dot] = dotRouteCount.GetValueOrDefault(dot, 0) + 1;
+                            if (!dotFirstRoute.ContainsKey(dot))
+                                dotFirstRoute[dot] = rIdx;
+
+                            linePoints.Add(dot.Position + (dot.Size * 0.5f));
                         }
+                    }
+                }
 
-                        dotRouteCount[dot] = dotRouteCount.GetValueOrDefault(dot, 0) + 1;
-                        if (!dotFirstRoute.ContainsKey(dot))
-                            dotFirstRoute[dot] = rIdx;
-
-                        linePoints.Add(dot.Position + (dot.Size * 0.5f));
+                if (linePoints.Count > 0)
+                {
+                    Vector2[] pts = linePoints.ToArray();
+                    if (rIdx < _glowLines.Count && GodotObject.IsInstanceValid(_glowLines[rIdx]))
+                    {
+                        _glowLines[rIdx].Points = pts;
+                        _glowLines[rIdx].DefaultColor = pal.GlowColor;
+                    }
+                    if (rIdx < _coreLines.Count && GodotObject.IsInstanceValid(_coreLines[rIdx]))
+                    {
+                        _coreLines[rIdx].Points = pts;
+                        _coreLines[rIdx].DefaultColor = pal.CoreColor;
                     }
                 }
             }
 
-            if (linePoints.Count > 0)
+            // Color dots: shared trunk dots get bright cyan-white, branch dots get their distinct route hue
+            foreach (TextureRect dot in _activeDots)
             {
-                Vector2[] pts = linePoints.ToArray();
-                if (rIdx < _glowLines.Count)
+                if (dot == null || !GodotObject.IsInstanceValid(dot))
+                    continue;
+
+                int count = dotRouteCount.GetValueOrDefault(dot, 1);
+                if (count > 1)
                 {
-                    _glowLines[rIdx].Points = pts;
-                    _glowLines[rIdx].DefaultColor = pal.GlowColor;
+                    _dotBaseColors[dot] = new Color(0.20f, 0.85f, 1.0f, 0.90f);
+                    _dotSurgeColors[dot] = new Color(1.0f, 1.0f, 1.0f, 1.0f);
                 }
-                if (rIdx < _coreLines.Count)
+                else
                 {
-                    _coreLines[rIdx].Points = pts;
-                    _coreLines[rIdx].DefaultColor = pal.CoreColor;
+                    int rIdx = dotFirstRoute.GetValueOrDefault(dot, 0);
+                    BranchPalette pal = Palettes[rIdx % Palettes.Length];
+                    _dotBaseColors[dot] = pal.BaseDotColor;
+                    _dotSurgeColors[dot] = pal.SurgeDotColor;
                 }
             }
-        }
 
-        // Color dots: shared trunk dots get bright cyan-white, branch dots get their distinct route hue
-        foreach (TextureRect dot in _activeDots)
-        {
-            int count = dotRouteCount.GetValueOrDefault(dot, 1);
-            if (count > 1)
+            // Present counter badges in active screen vision directly adjacent to the hovered node
+            if (pointsContainer != null && GodotObject.IsInstanceValid(pointsContainer) && pointDict != null)
             {
-                _dotBaseColors[dot] = new Color(0.20f, 0.85f, 1.0f, 0.90f);
-                _dotSurgeColors[dot] = new Color(1.0f, 1.0f, 1.0f, 1.0f);
+                PlaceBadges(pointsContainer, pointDict, routeSet);
             }
-            else
-            {
-                int rIdx = dotFirstRoute.GetValueOrDefault(dot, 0);
-                BranchPalette pal = Palettes[rIdx % Palettes.Length];
-                _dotBaseColors[dot] = pal.BaseDotColor;
-                _dotSurgeColors[dot] = pal.SurgeDotColor;
-            }
-        }
 
-        // Present counter badges in active screen vision directly adjacent to the hovered node
-        if (pointsContainer != null && GodotObject.IsInstanceValid(pointsContainer) && pointDict != null)
+            UpdateHudBanner(screen, routeSet);
+        }
+        catch (Exception ex)
         {
-            PlaceBadges(pointsContainer, pointDict, routeSet);
+            MainFile.Logger.Error($"Error applying route set highlight: {ex}");
         }
-
-        UpdateHudBanner(screen, routeSet);
     }
 
     private void PlaceBadges(Control pointsContainer, Dictionary<MapCoord, NMapPoint> pointDict, OptimalRouteSet routeSet)
@@ -391,6 +414,7 @@ public sealed class MapPathAnimator
             container = CreateSingleBadge(primaryRoute, tiedCount);
         }
 
+        container.ZIndex = 25; // Always render above map nodes & paths
         pointsContainer.AddChildSafely(container);
         _branchBadges.Add(container);
 
@@ -448,19 +472,19 @@ public sealed class MapPathAnimator
         StyleBoxFlat style = new()
         {
             BgColor = new Color(0.06f, 0.08f, 0.12f, 0.95f),
-            BorderColor = new Color(0.20f, 0.75f, 1.0f, 0.85f),
-            BorderWidthLeft = 1,
-            BorderWidthRight = 1,
-            BorderWidthTop = 1,
-            BorderWidthBottom = 1,
+            BorderColor = new Color(0.2f, 0.75f, 1.0f, 0.9f),
+            BorderWidthLeft = 2,
+            BorderWidthRight = 2,
+            BorderWidthTop = 2,
+            BorderWidthBottom = 2,
             CornerRadiusTopLeft = 8,
             CornerRadiusTopRight = 8,
             CornerRadiusBottomLeft = 8,
             CornerRadiusBottomRight = 8,
-            ContentMarginLeft = 12,
-            ContentMarginRight = 12,
-            ContentMarginTop = 7,
-            ContentMarginBottom = 7
+            ContentMarginLeft = 10,
+            ContentMarginRight = 10,
+            ContentMarginTop = 6,
+            ContentMarginBottom = 6
         };
         card.AddThemeStyleboxOverride("panel", style);
 
@@ -468,30 +492,21 @@ public sealed class MapPathAnimator
         {
             MouseFilter = Control.MouseFilterEnum.Ignore
         };
-        vbox.AddThemeConstantOverride("separation", 5);
+        vbox.AddThemeConstantOverride("separation", 4);
         card.AddChildSafely(vbox);
 
-        // Header with fork status
+        // Header
         HBoxContainer header = new() { MouseFilter = Control.MouseFilterEnum.Ignore };
         header.AddThemeConstantOverride("separation", 6);
         vbox.AddChildSafely(header);
 
-        Label icon = new()
-        {
-            Text = "⚡",
-            MouseFilter = Control.MouseFilterEnum.Ignore
-        };
-        icon.AddThemeColorOverride("font_color", new Color(1.0f, 0.85f, 0.2f));
-        icon.AddThemeFontSizeOverride("font_size", 13);
-        header.AddChildSafely(icon);
-
         Label title = new()
         {
-            Text = $"{routeSet.MaxHighValueCount} High-Value Rooms",
+            Text = $"{distinctRoutes.Count} Equal Routes",
             MouseFilter = Control.MouseFilterEnum.Ignore
         };
         title.AddThemeColorOverride("font_color", new Color("4DD0E1"));
-        title.AddThemeFontSizeOverride("font_size", 13);
+        title.AddThemeFontSizeOverride("font_size", 12);
         header.AddChildSafely(title);
 
         if (!string.IsNullOrEmpty(routeSet.ForkDescription))
@@ -670,19 +685,23 @@ public sealed class MapPathAnimator
 
         if (!hasItem)
         {
-            Label fightLabel = new()
+            Label directLabel = new()
             {
-                Text = $"{score.Monsters} Fights",
+                Text = "0 High-Value Rooms",
                 MouseFilter = Control.MouseFilterEnum.Ignore
             };
-            fightLabel.AddThemeColorOverride("font_color", new Color(0.85f, 0.85f, 0.9f));
-            fightLabel.AddThemeFontSizeOverride("font_size", 13);
-            hbox.AddChildSafely(fightLabel);
+            directLabel.AddThemeColorOverride("font_color", new Color(0.75f, 0.75f, 0.8f));
+            directLabel.AddThemeFontSizeOverride("font_size", 13);
+            hbox.AddChildSafely(directLabel);
         }
     }
 
     private void EnsureLineCount(Control pathsContainer, int requiredCount)
     {
+        // Prune any freed or detached lines from previous acts or scene resets
+        _glowLines.RemoveAll(l => l == null || !GodotObject.IsInstanceValid(l) || l.GetParent() != pathsContainer);
+        _coreLines.RemoveAll(l => l == null || !GodotObject.IsInstanceValid(l) || l.GetParent() != pathsContainer);
+
         while (_glowLines.Count < requiredCount)
         {
             Line2D glow = new()
@@ -724,7 +743,8 @@ public sealed class MapPathAnimator
         {
             Name = "MapPathHudBanner",
             MouseFilter = Control.MouseFilterEnum.Ignore,
-            Visible = false
+            Visible = false,
+            ZIndex = 100
         };
 
         StyleBoxFlat style = new()
@@ -804,6 +824,8 @@ public sealed class MapPathAnimator
         if (_hudBanner == null || !GodotObject.IsInstanceValid(_hudBanner) || _hudStats == null)
             return;
 
+        screen.MoveChild(_hudBanner, -1);
+
         string targetTypeName = routeSet.TargetPoint.PointType switch
         {
             MapPointType.RestSite => "Campsite",
@@ -824,7 +846,7 @@ public sealed class MapPathAnimator
             else
             {
                 OptimalRoute single = routeSet.Routes[0];
-                _hudStats.Text = $"{routeSet.Routes.Count} Equal Paths Found ({routeSet.MaxHighValueCount} High-Value Rooms) • {single.Score.Elites} Elites   •   {single.Score.RestSites} Camps   •   {single.Score.Shops} Shops";
+                _hudStats.Text = $"{routeSet.Routes.Count} Equal Paths Found ({routeSet.MaxHighValueCount} High-Value Rooms) • {FormatHighValueSummary(single.Score)}";
             }
         }
         else
@@ -833,9 +855,22 @@ public sealed class MapPathAnimator
             string prefix = single.IsFromCurrentLocation
                 ? $"via {targetTypeName}: "
                 : $"(Full Act via {targetTypeName}): ";
-            _hudStats.Text = $"{prefix}{single.Score.Elites} Elites   •   {single.Score.RestSites} Campsites   •   {single.Score.Shops} Shops   •   {single.Score.Monsters} Fights";
+            _hudStats.Text = $"{prefix}{FormatHighValueSummary(single.Score)}";
         }
 
         _hudBanner.Visible = true;
+    }
+
+    private static string FormatHighValueSummary(RouteScore score)
+    {
+        List<string> parts = [];
+        if (score.Elites > 0)
+            parts.Add($"{score.Elites} Elite" + (score.Elites > 1 ? "s" : ""));
+        if (score.RestSites > 0)
+            parts.Add($"{score.RestSites} Campsite" + (score.RestSites > 1 ? "s" : ""));
+        if (score.Shops > 0)
+            parts.Add($"{score.Shops} Shop" + (score.Shops > 1 ? "s" : ""));
+
+        return parts.Count > 0 ? string.Join("   •   ", parts) : "0 High-Value Rooms";
     }
 }

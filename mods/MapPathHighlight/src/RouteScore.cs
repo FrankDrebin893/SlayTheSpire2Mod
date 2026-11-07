@@ -5,7 +5,7 @@ namespace MapPathHighlight;
 
 /// <summary>
 /// Represents the scoring and breakdown of high-value rooms along a map route.
-/// Prioritizes maximizing Elites, Rest Sites (Campsites), and Shops.
+/// Exclusively evaluates Elites, Rest Sites (Campfires), and Shops as high-value nodes.
 /// </summary>
 public readonly struct RouteScore : IComparable<RouteScore>, IEquatable<RouteScore>
 {
@@ -72,7 +72,7 @@ public readonly struct RouteScore : IComparable<RouteScore>, IEquatable<RouteSco
 
     public int CompareTo(RouteScore other)
     {
-        // 1. Primary objective: maximize total count of target rooms (Elites + Campsites + Shops)
+        // 1. Primary objective: maximize total count of high-value rooms (Elites + Campsites + Shops)
         int cmp = TotalTargetRooms.CompareTo(other.TotalTargetRooms);
         if (cmp != 0) return cmp;
 
@@ -80,7 +80,7 @@ public readonly struct RouteScore : IComparable<RouteScore>, IEquatable<RouteSco
         cmp = Elites.CompareTo(other.Elites);
         if (cmp != 0) return cmp;
 
-        // 3. Tie-break 2: prioritize Rest Sites (Campsites)
+        // 3. Tie-break 2: prioritize Rest Sites (Campfires)
         cmp = RestSites.CompareTo(other.RestSites);
         if (cmp != 0) return cmp;
 
@@ -88,26 +88,22 @@ public readonly struct RouteScore : IComparable<RouteScore>, IEquatable<RouteSco
         cmp = Shops.CompareTo(other.Shops);
         if (cmp != 0) return cmp;
 
-        // 5. Tie-break 4: prioritize Unknown (?) rooms
-        cmp = Unknowns.CompareTo(other.Unknowns);
-        if (cmp != 0) return cmp;
-
-        // 6. Tie-break 5: prioritize Treasures
-        return Treasures.CompareTo(other.Treasures);
+        // 5. Tie-break 4: shorter path length (more direct route)
+        return other.Length.CompareTo(Length);
     }
 
+    /// <summary>
+    /// Two route scores are considered equal when their high-value node composition is identical.
+    /// Non-high-value nodes (hallway fights, unknowns, treasures) do not differentiate high-value scores.
+    /// </summary>
     public bool Equals(RouteScore other) =>
         Elites == other.Elites &&
         RestSites == other.RestSites &&
-        Shops == other.Shops &&
-        Unknowns == other.Unknowns &&
-        Monsters == other.Monsters &&
-        Treasures == other.Treasures &&
-        Length == other.Length;
+        Shops == other.Shops;
 
     public override bool Equals(object? obj) => obj is RouteScore other && Equals(other);
 
-    public override int GetHashCode() => HashCode.Combine(Elites, RestSites, Shops, Unknowns, Monsters, Treasures, Length);
+    public override int GetHashCode() => HashCode.Combine(Elites, RestSites, Shops);
 
     public static bool operator ==(RouteScore left, RouteScore right) => left.Equals(right);
     public static bool operator !=(RouteScore left, RouteScore right) => !left.Equals(right);

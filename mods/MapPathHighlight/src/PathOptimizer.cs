@@ -38,7 +38,7 @@ public sealed class OptimalRouteSet
 
 /// <summary>
 /// Calculates optimal paths in the map DAG that maximize high-value encounters
-/// (Elites, Rest Sites / Campsites, Shops), branching when multiple paths achieve equal maximums.
+/// (Elites, Rest Sites / Campfires, Shops), branching when multiple paths achieve equal maximums.
 /// </summary>
 public static class PathOptimizer
 {
@@ -74,8 +74,12 @@ public static class PathOptimizer
         }
         else
         {
-            // Collect all starting candidates (row 0)
-            if (map.startMapPoints != null && map.startMapPoints.Count > 0)
+            // Collect all starting candidates: root of act map
+            if (map.StartingMapPoint != null)
+            {
+                startNodes.Add(map.StartingMapPoint);
+            }
+            else if (map.startMapPoints != null && map.startMapPoints.Count > 0)
             {
                 foreach (MapPoint p in map.startMapPoints)
                     startNodes.Add(p);
@@ -84,12 +88,6 @@ public static class PathOptimizer
             {
                 foreach (MapPoint p in map.GetPointsInRow(0))
                     startNodes.Add(p);
-            }
-
-            if (startNodes.Count == 0 && map.StartingMapPoint != null)
-            {
-                foreach (MapPoint child in map.StartingMapPoint.Children)
-                    startNodes.Add(child);
             }
         }
 
@@ -115,7 +113,6 @@ public static class PathOptimizer
 
         // Combine all incoming and outgoing branches
         List<OptimalRoute> allRoutes = [];
-        bool isActStart = (visitedCoords == null || visitedCoords.Count == 0) && map.StartingMapPoint != null;
 
         foreach (var inPath in partA.Paths)
         {
@@ -129,12 +126,6 @@ public static class PathOptimizer
                 }
 
                 int targetIndex = inPath.Count - 1;
-
-                if (isActStart && map.StartingMapPoint != null)
-                {
-                    fullPath.Insert(0, map.StartingMapPoint);
-                    targetIndex++;
-                }
 
                 RouteScore score = CalculateScore(fullPath);
 
@@ -152,8 +143,11 @@ public static class PathOptimizer
         if (allRoutes.Count == 0)
             return null;
 
+        // Sort all routes by optimal high-value priority (most target rooms -> elites -> campfires -> shops)
+        allRoutes.Sort((a, b) => b.Score.CompareTo(a.Score));
+
         // Deduplicate routes:
-        // Prioritize distinct scores, then distinct physical branches, capped to MaxBranchRoutes (3)
+        // Prioritize distinct high-value scores (Elites/Camps/Shops trade-offs), then distinct physical paths, capped to MaxBranchRoutes (3)
         List<OptimalRoute> routes = [];
         HashSet<RouteScore> seenScores = [];
         HashSet<string> seenSignatures = [];
@@ -189,7 +183,7 @@ public static class PathOptimizer
             IsFromCurrentLocation = isFromCurrentLocation,
             MaxHighValueCount = routes[0].Score.TotalTargetRooms,
             ForkDescription = routes.Count > 1 ? DetermineForkDescription(routes, targetPoint) : null,
-            HasDistinctScores = routes.Any(r => r.Score != routes[0].Score)
+            HasDistinctScores = routes.Any(r => !r.Score.Equals(routes[0].Score))
         };
     }
 
@@ -417,7 +411,6 @@ public static class PathOptimizer
         MapPointType.Elite => "Elite",
         MapPointType.Treasure => "Chest",
         MapPointType.Boss => "Boss",
-        MapPointType.Monster => "Monster",
         _ => "Node"
     };
-    }
+}

@@ -13,7 +13,7 @@ build/Sts2PathDiscovery.props   shared game path discovery; every csproj imports
 build/make_art.py               generates the icon/banner art (needs Pillow)
 mods/<Name>/                    one self-contained mod: <id>.csproj, <id>.json (manifest), MainFile.cs, src/, README.md, art/, workshop/
 mods/SeedSearch/                id RasmusSlayTheSpire2Mod (legacy id, kept so the existing Workshop item survives); includes seed-engine/ (Rust)
-mods/CardBalance/               id RasmusCardBalance, displayed as "Balance Tweaks" (folder and id kept so the Workshop item survives); card/relic tweaks (Master Planner, Calculated Gamble, Unceasing Top) with per-tweak toggles
+mods/CardBalance/               id RasmusCardBalance, displayed as "Balance Tweaks" (folder and id kept so the Workshop item survives); card/relic tweaks (Master Planner, Calculated Gamble, Unceasing Top, Frozen Eye) with per-tweak toggles
 mods/CardRarityRandomizer/      third mod (randomized card rarities); follows the same layout
 mods/MapPathHighlight/          fourth mod (optimal route pathfinding & current animation on hover); follows the same layout
 ```

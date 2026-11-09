@@ -13,6 +13,16 @@ Find the seed you want before the run starts. A **Search Seed** button on the Cu
 
 Saved data lives in `%APPDATA%/SlayTheSpire2/RasmusSlayTheSpire2Mod/seed_search.json`.
 
+## Screenshots
+
+The Search Seed button next to the seed box on the Custom Run screen:
+
+![Search Seed button on the Custom Run screen](screenshots/1-search-seed-button.jpg)
+
+The filter panel, with a filter added:
+
+![Seed Search filter panel](screenshots/2-filter-panel.jpg)
+
 ## Layout
 
 ```

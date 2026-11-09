@@ -6,20 +6,15 @@ A Slay the Spire 2 mod. At the start of every run the rarity of every card is sh
 
 ## Screenshots
 
-### 1. Summary Screen (Run Start)
-Lists every card that changed rarity this run, sorted by character pool with the biggest jumps first. Includes quick access to open the in-game Card Library (Compendium) or start the run.
+### Summary screen (run start)
+Lists every card that changed rarity this run, with quick access to the Card Library.
 
-![Summary Screen](art/screenshots/1_summary_screen.png)
+![Summary screen](screenshots/1-summary-screen.jpg)
 
-### 2. In-Game Toggle (Character Select & Custom Run)
-Easily toggle between randomized runs and standard vanilla runs with a single click right before embarking—no game restart required! Once embarked, the setting is locked for that run to ensure game consistency.
+### Card Library with shuffled rarities
+Press **F8** during a run (or use the summary screen's button) to browse every card with its new rarity.
 
-![Character Select Toggle](art/screenshots/2_character_select_toggle.png)
-
-### 3. Shuffled Card Rewards
-Card rewards, shops, and rarity-based mechanics follow the new shuffled rarities!
-
-![Shuffled Card Rewards](art/screenshots/3_shuffled_card_rewards.png)
+![Card Library with shuffled rarities](screenshots/2-shuffled-card-library.jpg)
 
 ---
 
@@ -47,7 +42,7 @@ dotnet build mods/CardRarityRandomizer -c Release
 
 The build copies the `.dll`, `.pdb` and `.json` into the game's `mods/CardRarityRandomizer/` folder (this fails while the game is running). The game path is found by `build/Sts2PathDiscovery.props`; override it with `/p:Sts2Path=...`.
 
-Generate screenshots and preview art with:
+Generate the preview art with:
 ```
 python build/make_screenshots.py
 ```

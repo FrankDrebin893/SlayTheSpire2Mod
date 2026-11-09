@@ -13,6 +13,16 @@ Small, targeted card and relic balance changes for Slay the Spire 2. Code-only (
 | Calculated Gamble | Upgrading removes Exhaust instead of adding Retain. |
 | Frozen Eye (relic) | Re-added as a shop relic: when viewing your Draw Pile, the cards are shown in draw order. |
 
+## Screenshots
+
+Master Planner costing 1 energy in the Card Library:
+
+![Master Planner](screenshots/2-master-planner.jpg)
+
+The per-tweak toggles at the bottom of Settings > General:
+
+![Balance Tweaks toggles in Settings](screenshots/1-settings-toggles.jpg)
+
 ## Turning changes on and off
 
 Every change has its own checkbox under **Settings > General**, in the *Balance Tweaks* section at the bottom. All are on by default. Choices are saved to <user data>/RasmusCardBalance/settings.json (not the mod folder, whose .json files are read as manifests).

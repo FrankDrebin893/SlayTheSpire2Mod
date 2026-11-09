@@ -6,6 +6,16 @@ An interactive map pathfinding and route preview mod for Slay the Spire 2. Code-
 
 Hover over any destination node on the map screen (such as a campsite, shop, elite, or the boss) to dynamically calculate and highlight the optimal route leading through it, animated with an electric current surging upward from the bottom towards the top of the map.
 
+## Screenshots
+
+Hovering a node previews the optimal route; when several routes tie, every branch is highlighted with an on-map badge and the top banner shows the breakdown:
+
+![Multi-branch route preview](screenshots/1-multi-branch-route.jpg)
+
+![Route to an elite](screenshots/2-route-to-elite.jpg)
+
+![Route via a merchant](screenshots/3-route-via-merchant.jpg)
+
 ## Features
 
 - **Hover Route Preview**: Hover over any node on the map to preview the optimal path from your current location (or from the start of the act) passing through that node to the boss.

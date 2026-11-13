@@ -7,6 +7,7 @@ using HarmonyLib;
 using MegaCrit.Sts2.Core.Helpers;
 using MegaCrit.Sts2.Core.Map;
 using MegaCrit.Sts2.Core.Nodes.Screens.Map;
+using MegaCrit.Sts2.Core.Rooms;
 using MegaCrit.Sts2.Core.Runs;
 
 namespace MapPathHighlight;
@@ -34,8 +35,7 @@ public sealed class MapPathAnimator
         Color SurgeDotColor,
         Color GlowColor,
         Color CoreColor,
-        Color AccentColor,
-        string Symbol);
+        Color AccentColor);
 
     private static readonly BranchPalette[] Palettes =
     [
@@ -45,8 +45,7 @@ public sealed class MapPathAnimator
             SurgeDotColor: new Color(1.0f, 1.0f, 1.0f, 1.0f),
             GlowColor: new Color(0.18f, 0.75f, 1.0f, 0.55f),
             CoreColor: new Color(0.92f, 0.98f, 1.0f, 0.95f),
-            AccentColor: new Color("33BFFF"),
-            Symbol: "🔵"
+            AccentColor: new Color("33BFFF")
         ),
         new BranchPalette(
             Name: "Amber",
@@ -54,8 +53,7 @@ public sealed class MapPathAnimator
             SurgeDotColor: new Color(1.0f, 0.98f, 0.85f, 1.0f),
             GlowColor: new Color(1.0f, 0.75f, 0.15f, 0.55f),
             CoreColor: new Color(1.0f, 0.98f, 0.88f, 0.95f),
-            AccentColor: new Color("FFD166"),
-            Symbol: "🟡"
+            AccentColor: new Color("FFD166")
         ),
         new BranchPalette(
             Name: "Coral",
@@ -63,8 +61,7 @@ public sealed class MapPathAnimator
             SurgeDotColor: new Color(1.0f, 0.90f, 0.95f, 1.0f),
             GlowColor: new Color(1.0f, 0.35f, 0.55f, 0.55f),
             CoreColor: new Color(1.0f, 0.92f, 0.95f, 0.95f),
-            AccentColor: new Color("FF6B8B"),
-            Symbol: "🔴"
+            AccentColor: new Color("FF6B8B")
         )
     ];
 
@@ -72,9 +69,7 @@ public sealed class MapPathAnimator
     private readonly List<Line2D> _glowLines = [];
     private readonly List<Line2D> _coreLines = [];
     private readonly List<PanelContainer> _branchBadges = [];
-    private PanelContainer? _hudBanner;
-    private Label? _hudIcon;
-    private Label? _hudStats;
+    private readonly Dictionary<MapPointType, Texture2D?> _roomIcons = [];
 
     // State tracking
     private NMapPoint? _currentHoveredPoint;
@@ -239,19 +234,12 @@ public sealed class MapPathAnimator
             badge?.QueueFreeSafely();
         }
         _branchBadges.Clear();
-
-        if (_hudBanner != null && GodotObject.IsInstanceValid(_hudBanner))
-        {
-            _hudBanner.Visible = false;
-        }
     }
 
     private void ApplyRouteSetHighlight(NMapScreen screen, OptimalRouteSet routeSet)
     {
         try
         {
-            EnsureHudBanner(screen);
-
             Control? pathsContainer = PathsContainerField?.GetValue(screen) as Control;
             Control? pointsContainer = PointsContainerField?.GetValue(screen) as Control;
             if (pathsContainer == null || !GodotObject.IsInstanceValid(pathsContainer))
@@ -347,8 +335,6 @@ public sealed class MapPathAnimator
             {
                 PlaceBadges(pointsContainer, pointDict, routeSet);
             }
-
-            UpdateHudBanner(screen, routeSet);
         }
         catch (Exception ex)
         {
@@ -403,15 +389,12 @@ public sealed class MapPathAnimator
         PanelContainer container;
         if (routeSet.HasDistinctScores && distinctScoreRoutes.Count > 1)
         {
-            // Concept 4: Unified Multi-Branch Decision Card
-            container = CreateUnifiedBranchCard(routeSet, distinctScoreRoutes);
+            container = CreateUnifiedBranchCard(distinctScoreRoutes);
         }
         else
         {
-            // Single compact badge
             OptimalRoute primaryRoute = distinctScoreRoutes[0];
-            int tiedCount = routeSet.Routes.Count;
-            container = CreateSingleBadge(primaryRoute, tiedCount);
+            container = CreateSingleBadge(primaryRoute);
         }
 
         container.ZIndex = 25; // Always render above map nodes & paths
@@ -420,7 +403,7 @@ public sealed class MapPathAnimator
 
         container.ResetSize();
         Vector2 minSize = container.GetCombinedMinimumSize();
-        float cardWidth = Math.Max(minSize.X, 150f);
+        float cardWidth = Math.Max(minSize.X, 48f);
         float cardHeight = Math.Max(minSize.Y, 28f);
 
         const float gapX = 46f;
@@ -461,7 +444,7 @@ public sealed class MapPathAnimator
         container.Position = bestPos;
     }
 
-    private PanelContainer CreateUnifiedBranchCard(OptimalRouteSet routeSet, List<OptimalRoute> distinctRoutes)
+    private PanelContainer CreateUnifiedBranchCard(List<OptimalRoute> distinctRoutes)
     {
         PanelContainer card = new()
         {
@@ -481,8 +464,8 @@ public sealed class MapPathAnimator
             CornerRadiusTopRight = 8,
             CornerRadiusBottomLeft = 8,
             CornerRadiusBottomRight = 8,
-            ContentMarginLeft = 10,
-            ContentMarginRight = 10,
+            ContentMarginLeft = 9,
+            ContentMarginRight = 9,
             ContentMarginTop = 6,
             ContentMarginBottom = 6
         };
@@ -492,83 +475,42 @@ public sealed class MapPathAnimator
         {
             MouseFilter = Control.MouseFilterEnum.Ignore
         };
-        vbox.AddThemeConstantOverride("separation", 4);
+        vbox.AddThemeConstantOverride("separation", 5);
         card.AddChildSafely(vbox);
 
-        // Header
-        HBoxContainer header = new() { MouseFilter = Control.MouseFilterEnum.Ignore };
-        header.AddThemeConstantOverride("separation", 6);
-        vbox.AddChildSafely(header);
-
-        Label title = new()
-        {
-            Text = $"{distinctRoutes.Count} Equal Routes",
-            MouseFilter = Control.MouseFilterEnum.Ignore
-        };
-        title.AddThemeColorOverride("font_color", new Color("4DD0E1"));
-        title.AddThemeFontSizeOverride("font_size", 12);
-        header.AddChildSafely(title);
-
-        if (!string.IsNullOrEmpty(routeSet.ForkDescription))
-        {
-            Label bullet = new() { Text = "•", MouseFilter = Control.MouseFilterEnum.Ignore };
-            bullet.AddThemeColorOverride("font_color", new Color(0.5f, 0.6f, 0.7f));
-            bullet.AddThemeFontSizeOverride("font_size", 12);
-            header.AddChildSafely(bullet);
-
-            Label fork = new()
-            {
-                Text = routeSet.ForkDescription,
-                MouseFilter = Control.MouseFilterEnum.Ignore
-            };
-            fork.AddThemeColorOverride("font_color", new Color("D0D5E0"));
-            fork.AddThemeFontSizeOverride("font_size", 12);
-            header.AddChildSafely(fork);
-        }
-
-        // Divider
-        ColorRect divider = new()
-        {
-            CustomMinimumSize = new Vector2(0, 1),
-            Color = new Color(0.2f, 0.35f, 0.5f, 0.45f),
-            MouseFilter = Control.MouseFilterEnum.Ignore
-        };
-        vbox.AddChildSafely(divider);
-
-        // Branch trade-off rows
         for (int i = 0; i < distinctRoutes.Count; i++)
         {
             OptimalRoute r = distinctRoutes[i];
             BranchPalette pal = Palettes[i % Palettes.Length];
 
             HBoxContainer row = new() { MouseFilter = Control.MouseFilterEnum.Ignore };
-            row.AddThemeConstantOverride("separation", 5);
+            row.AddThemeConstantOverride("separation", 8);
             vbox.AddChildSafely(row);
 
-            Label symbol = new()
+            Panel swatch = new()
             {
-                Text = pal.Symbol,
+                CustomMinimumSize = new Vector2(10, 10),
+                SizeFlagsVertical = Control.SizeFlags.ShrinkCenter,
                 MouseFilter = Control.MouseFilterEnum.Ignore
             };
-            symbol.AddThemeFontSizeOverride("font_size", 11);
-            row.AddChildSafely(symbol);
-
-            Label name = new()
+            StyleBoxFlat swatchStyle = new()
             {
-                Text = $"{pal.Name}:",
-                MouseFilter = Control.MouseFilterEnum.Ignore
+                BgColor = pal.AccentColor,
+                CornerRadiusTopLeft = 5,
+                CornerRadiusTopRight = 5,
+                CornerRadiusBottomLeft = 5,
+                CornerRadiusBottomRight = 5
             };
-            name.AddThemeColorOverride("font_color", pal.AccentColor);
-            name.AddThemeFontSizeOverride("font_size", 13);
-            row.AddChildSafely(name);
+            swatch.AddThemeStyleboxOverride("panel", swatchStyle);
+            row.AddChildSafely(swatch);
 
-            AddScoreLabelsToContainer(row, r.Score);
+            AddScoreIconsToContainer(row, r.Score);
         }
 
         return card;
     }
 
-    private PanelContainer CreateSingleBadge(OptimalRoute route, int tiedCount)
+    private PanelContainer CreateSingleBadge(OptimalRoute route)
     {
         PanelContainer badge = new()
         {
@@ -599,100 +541,128 @@ public sealed class MapPathAnimator
         {
             MouseFilter = Control.MouseFilterEnum.Ignore
         };
-        hbox.AddThemeConstantOverride("separation", 5);
+        hbox.AddThemeConstantOverride("separation", 8);
         badge.AddChildSafely(hbox);
 
-        AddScoreLabelsToContainer(hbox, route.Score);
-
-        if (tiedCount > 1)
-        {
-            Label bullet = new() { Text = "•", MouseFilter = Control.MouseFilterEnum.Ignore };
-            bullet.AddThemeColorOverride("font_color", new Color(0.5f, 0.6f, 0.7f));
-            bullet.AddThemeFontSizeOverride("font_size", 13);
-            hbox.AddChildSafely(bullet);
-
-            Label tiedLabel = new()
-            {
-                Text = $"{tiedCount} Equal Paths",
-                MouseFilter = Control.MouseFilterEnum.Ignore
-            };
-            tiedLabel.AddThemeColorOverride("font_color", new Color("4DD0E1"));
-            tiedLabel.AddThemeFontSizeOverride("font_size", 13);
-            hbox.AddChildSafely(tiedLabel);
-        }
+        AddScoreIconsToContainer(hbox, route.Score);
 
         return badge;
     }
 
-    private static void AddScoreLabelsToContainer(HBoxContainer hbox, RouteScore score)
+    private void AddScoreIconsToContainer(HBoxContainer hbox, RouteScore score)
     {
         bool hasItem = false;
 
         if (score.Elites > 0)
         {
-            Label eliteLabel = new()
-            {
-                Text = $"{score.Elites} Elite" + (score.Elites > 1 ? "s" : ""),
-                MouseFilter = Control.MouseFilterEnum.Ignore
-            };
-            eliteLabel.AddThemeColorOverride("font_color", new Color("FF6B6B"));
-            eliteLabel.AddThemeFontSizeOverride("font_size", 13);
-            hbox.AddChildSafely(eliteLabel);
+            AddRoomCountPair(hbox, MapPointType.Elite, score.Elites, new Color("FF6B6B"), "E");
             hasItem = true;
         }
 
         if (score.RestSites > 0)
         {
-            if (hasItem)
-            {
-                Label bullet = new() { Text = "•", MouseFilter = Control.MouseFilterEnum.Ignore };
-                bullet.AddThemeColorOverride("font_color", new Color(0.6f, 0.6f, 0.7f));
-                bullet.AddThemeFontSizeOverride("font_size", 13);
-                hbox.AddChildSafely(bullet);
-            }
-
-            Label campLabel = new()
-            {
-                Text = $"{score.RestSites} Camp" + (score.RestSites > 1 ? "s" : ""),
-                MouseFilter = Control.MouseFilterEnum.Ignore
-            };
-            campLabel.AddThemeColorOverride("font_color", new Color("51CF66"));
-            campLabel.AddThemeFontSizeOverride("font_size", 13);
-            hbox.AddChildSafely(campLabel);
+            AddRoomCountPair(hbox, MapPointType.RestSite, score.RestSites, new Color("51CF66"), "R");
             hasItem = true;
         }
 
         if (score.Shops > 0)
         {
-            if (hasItem)
-            {
-                Label bullet = new() { Text = "•", MouseFilter = Control.MouseFilterEnum.Ignore };
-                bullet.AddThemeColorOverride("font_color", new Color(0.6f, 0.6f, 0.7f));
-                bullet.AddThemeFontSizeOverride("font_size", 13);
-                hbox.AddChildSafely(bullet);
-            }
-
-            Label shopLabel = new()
-            {
-                Text = $"{score.Shops} Shop" + (score.Shops > 1 ? "s" : ""),
-                MouseFilter = Control.MouseFilterEnum.Ignore
-            };
-            shopLabel.AddThemeColorOverride("font_color", new Color("FCC419"));
-            shopLabel.AddThemeFontSizeOverride("font_size", 13);
-            hbox.AddChildSafely(shopLabel);
+            AddRoomCountPair(hbox, MapPointType.Shop, score.Shops, new Color("FCC419"), "$");
             hasItem = true;
         }
 
         if (!hasItem)
         {
-            Label directLabel = new()
+            Label emptyLabel = new()
             {
-                Text = "0 High-Value Rooms",
+                Text = "—",
                 MouseFilter = Control.MouseFilterEnum.Ignore
             };
-            directLabel.AddThemeColorOverride("font_color", new Color(0.75f, 0.75f, 0.8f));
-            directLabel.AddThemeFontSizeOverride("font_size", 13);
-            hbox.AddChildSafely(directLabel);
+            emptyLabel.AddThemeColorOverride("font_color", new Color(0.65f, 0.7f, 0.78f));
+            emptyLabel.AddThemeFontSizeOverride("font_size", 14);
+            hbox.AddChildSafely(emptyLabel);
+        }
+    }
+
+    private void AddRoomCountPair(HBoxContainer parent, MapPointType pointType, int count, Color color, string fallbackSymbol)
+    {
+        HBoxContainer pair = new()
+        {
+            MouseFilter = Control.MouseFilterEnum.Ignore
+        };
+        pair.AddThemeConstantOverride("separation", 3);
+
+        Texture2D? icon = GetRoomIcon(pointType);
+        if (icon != null)
+        {
+            TextureRect iconRect = new()
+            {
+                Texture = icon,
+                CustomMinimumSize = new Vector2(20, 20),
+                ExpandMode = TextureRect.ExpandModeEnum.IgnoreSize,
+                StretchMode = TextureRect.StretchModeEnum.KeepAspectCentered,
+                SizeFlagsVertical = Control.SizeFlags.ShrinkCenter,
+                MouseFilter = Control.MouseFilterEnum.Ignore
+            };
+            pair.AddChildSafely(iconRect);
+        }
+        else
+        {
+            Label fallback = new()
+            {
+                Text = fallbackSymbol,
+                SizeFlagsVertical = Control.SizeFlags.ShrinkCenter,
+                MouseFilter = Control.MouseFilterEnum.Ignore
+            };
+            fallback.AddThemeColorOverride("font_color", color);
+            fallback.AddThemeFontSizeOverride("font_size", 14);
+            pair.AddChildSafely(fallback);
+        }
+
+        Label countLabel = new()
+        {
+            Text = count.ToString(),
+            SizeFlagsVertical = Control.SizeFlags.ShrinkCenter,
+            MouseFilter = Control.MouseFilterEnum.Ignore
+        };
+        countLabel.AddThemeColorOverride("font_color", color);
+        countLabel.AddThemeFontSizeOverride("font_size", 14);
+        pair.AddChildSafely(countLabel);
+
+        parent.AddChildSafely(pair);
+    }
+
+    private Texture2D? GetRoomIcon(MapPointType pointType)
+    {
+        if (_roomIcons.TryGetValue(pointType, out Texture2D? cached))
+            return cached;
+
+        (string runHistoryPath, RoomType roomType) = pointType switch
+        {
+            MapPointType.Elite => ("res://images/ui/run_history/elite.png", RoomType.Elite),
+            MapPointType.RestSite => ("res://images/ui/run_history/rest_site.png", RoomType.RestSite),
+            MapPointType.Shop => ("res://images/ui/run_history/shop.png", RoomType.Shop),
+            _ => ("", RoomType.Unassigned)
+        };
+
+        Texture2D? tex = LoadTexture(runHistoryPath)
+            ?? (roomType != RoomType.Unassigned ? LoadTexture(ImageHelper.GetRoomIconPath(pointType, roomType, null)) : null);
+
+        _roomIcons[pointType] = tex;
+        return tex;
+    }
+
+    private static Texture2D? LoadTexture(string? path)
+    {
+        try
+        {
+            return !string.IsNullOrEmpty(path) && ResourceLoader.Exists(path)
+                ? ResourceLoader.Load<Texture2D>(path, null, ResourceLoader.CacheMode.Reuse)
+                : null;
+        }
+        catch
+        {
+            return null;
         }
     }
 
@@ -730,147 +700,5 @@ public sealed class MapPathAnimator
             pathsContainer.AddChildSafely(core);
             _coreLines.Add(core);
         }
-    }
-
-    private void EnsureHudBanner(NMapScreen screen)
-    {
-        if (_hudBanner != null && GodotObject.IsInstanceValid(_hudBanner) && _hudBanner.GetParent() == screen)
-            return;
-
-        _hudBanner?.QueueFreeSafely();
-
-        _hudBanner = new PanelContainer
-        {
-            Name = "MapPathHudBanner",
-            MouseFilter = Control.MouseFilterEnum.Ignore,
-            Visible = false,
-            ZIndex = 100
-        };
-
-        StyleBoxFlat style = new()
-        {
-            BgColor = new Color(0.06f, 0.08f, 0.12f, 0.92f),
-            BorderColor = new Color(0.2f, 0.75f, 1.0f, 0.85f),
-            BorderWidthLeft = 2,
-            BorderWidthRight = 2,
-            BorderWidthTop = 2,
-            BorderWidthBottom = 2,
-            CornerRadiusTopLeft = 8,
-            CornerRadiusTopRight = 8,
-            CornerRadiusBottomLeft = 8,
-            CornerRadiusBottomRight = 8,
-            ContentMarginLeft = 18,
-            ContentMarginRight = 18,
-            ContentMarginTop = 8,
-            ContentMarginBottom = 8
-        };
-        _hudBanner.AddThemeStyleboxOverride("panel", style);
-
-        HBoxContainer hbox = new()
-        {
-            MouseFilter = Control.MouseFilterEnum.Ignore
-        };
-        hbox.AddThemeConstantOverride("separation", 10);
-        _hudBanner.AddChildSafely(hbox);
-
-        _hudIcon = new Label
-        {
-            Text = "⚡",
-            MouseFilter = Control.MouseFilterEnum.Ignore
-        };
-        _hudIcon.AddThemeColorOverride("font_color", new Color(1.0f, 0.85f, 0.2f, 1.0f));
-        _hudIcon.AddThemeFontSizeOverride("font_size", 22);
-        hbox.AddChildSafely(_hudIcon);
-
-        Label title = new()
-        {
-            Text = "OPTIMAL ROUTE",
-            MouseFilter = Control.MouseFilterEnum.Ignore
-        };
-        title.AddThemeColorOverride("font_color", new Color(0.35f, 0.85f, 1.0f, 1.0f));
-        title.AddThemeFontSizeOverride("font_size", 16);
-        hbox.AddChildSafely(title);
-
-        Label divider = new()
-        {
-            Text = "|",
-            MouseFilter = Control.MouseFilterEnum.Ignore
-        };
-        divider.AddThemeColorOverride("font_color", new Color(0.5f, 0.5f, 0.6f, 0.7f));
-        divider.AddThemeFontSizeOverride("font_size", 16);
-        hbox.AddChildSafely(divider);
-
-        _hudStats = new Label
-        {
-            MouseFilter = Control.MouseFilterEnum.Ignore
-        };
-        _hudStats.AddThemeColorOverride("font_color", new Color(0.95f, 0.95f, 0.98f, 1.0f));
-        _hudStats.AddThemeFontSizeOverride("font_size", 16);
-        hbox.AddChildSafely(_hudStats);
-
-        _hudBanner.AnchorLeft = 0.5f;
-        _hudBanner.AnchorRight = 0.5f;
-        _hudBanner.OffsetLeft = -320f;
-        _hudBanner.OffsetRight = 320f;
-        _hudBanner.OffsetTop = 22f;
-        _hudBanner.OffsetBottom = 66f;
-        _hudBanner.GrowHorizontal = Control.GrowDirection.Both;
-
-        screen.AddChildSafely(_hudBanner);
-    }
-
-    private void UpdateHudBanner(NMapScreen screen, OptimalRouteSet routeSet)
-    {
-        if (_hudBanner == null || !GodotObject.IsInstanceValid(_hudBanner) || _hudStats == null)
-            return;
-
-        screen.MoveChild(_hudBanner, -1);
-
-        string targetTypeName = routeSet.TargetPoint.PointType switch
-        {
-            MapPointType.RestSite => "Campsite",
-            MapPointType.Shop => "Shop",
-            MapPointType.Elite => "Elite",
-            MapPointType.Treasure => "Chest",
-            MapPointType.Boss => "Boss",
-            _ => "Target"
-        };
-
-        if (routeSet.Routes.Count > 1)
-        {
-            if (routeSet.HasDistinctScores)
-            {
-                string forkText = !string.IsNullOrEmpty(routeSet.ForkDescription) ? $" • {routeSet.ForkDescription}" : "";
-                _hudStats.Text = $"{routeSet.Routes.Count} Equal Branches ({routeSet.MaxHighValueCount} High-Value Rooms){forkText} • See Card for Trade-offs";
-            }
-            else
-            {
-                OptimalRoute single = routeSet.Routes[0];
-                _hudStats.Text = $"{routeSet.Routes.Count} Equal Paths Found ({routeSet.MaxHighValueCount} High-Value Rooms) • {FormatHighValueSummary(single.Score)}";
-            }
-        }
-        else
-        {
-            OptimalRoute single = routeSet.Routes[0];
-            string prefix = single.IsFromCurrentLocation
-                ? $"via {targetTypeName}: "
-                : $"(Full Act via {targetTypeName}): ";
-            _hudStats.Text = $"{prefix}{FormatHighValueSummary(single.Score)}";
-        }
-
-        _hudBanner.Visible = true;
-    }
-
-    private static string FormatHighValueSummary(RouteScore score)
-    {
-        List<string> parts = [];
-        if (score.Elites > 0)
-            parts.Add($"{score.Elites} Elite" + (score.Elites > 1 ? "s" : ""));
-        if (score.RestSites > 0)
-            parts.Add($"{score.RestSites} Campsite" + (score.RestSites > 1 ? "s" : ""));
-        if (score.Shops > 0)
-            parts.Add($"{score.Shops} Shop" + (score.Shops > 1 ? "s" : ""));
-
-        return parts.Count > 0 ? string.Join("   •   ", parts) : "0 High-Value Rooms";
     }
 }

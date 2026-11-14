@@ -3,7 +3,7 @@
   "name": "Seed Search",
   "author": "Rasmus",
   "description": "Find the seed you want before the run starts. Both Standard Run (Character Select) and Custom Run screens get a Search Seed button for finding seeds by Neow offers & outcomes, Act 2/3 Ancient relics, First Shop inventory, Treasure Chest & reward relics, bosses, events, fights, single-path & total map counts, and Floor 1 rewards (with OR filter groups, bookmarks, and saved searches).",
-  "version": "v2.1.0",
+  "version": "v2.1.1",
   "min_game_version": "0.111.0",
   "has_pck": false,
   "has_dll": true,

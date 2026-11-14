@@ -365,13 +365,18 @@ impl Gen<'_> {
 
     fn repair_point_type(&mut self, ty: u8, target: i32) -> bool {
         let all = self.all_points();
-        let have = all.iter().filter(|&&p| self.pts[p].ty == ty).count() as i32;
+        let have = all.iter().filter(|&&p| self.pts[p].ty == ty && self.pts[p].can_modify).count() as i32;
         let mut missing = target - have;
         if missing <= 0 {
             return false;
         }
-        let mut list: Vec<P> = all.into_iter().filter(|&p| self.pts[p].ty == MONSTER && self.pts[p].can_modify).collect();
+        let mut list: Vec<P> = all.iter().copied().filter(|&p| self.pts[p].ty == MONSTER && self.pts[p].can_modify).collect();
         self.rng.unstable_shuffle(&mut list);
+        if ty != UNKNOWN {
+            let mut list2: Vec<P> = all.into_iter().filter(|&p| self.pts[p].ty == UNKNOWN && self.pts[p].can_modify).collect();
+            self.rng.unstable_shuffle(&mut list2);
+            list.extend(list2);
+        }
         let mut changed = false;
         for p in list {
             if missing == 0 {

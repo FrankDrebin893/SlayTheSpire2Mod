@@ -58,6 +58,7 @@ public sealed class SeedSearchScreen
 
     private ISeedSearch? _search;
     private SimResult? _shown;
+    private string _selectedSeed;
     private readonly List<(Button Row, string Seed)> _bookmarkRows = [];
 
     private GameData Data => _engine.Data;
@@ -74,6 +75,7 @@ public sealed class SeedSearchScreen
         _hostScreen = hostScreen;
         _lobby = lobby;
         _initialSeed = initialSeed;
+        _selectedSeed = initialSeed.Trim();
         _applySeed = applySeed;
         _buttonFields = buttonFields;
         _isStandardRun = isStandardRun;
@@ -447,9 +449,16 @@ public sealed class SeedSearchScreen
             _results.DeselectAll();
 
         _shown = seed.Length == 0 ? null : _engine.Simulate(seed);
-        _useButton.Disabled = _shown == null;
+        RefreshUseButton();
         ShowBookmarkState();
         _preview.Show(_shown, seed.Length == 0 ? "Pick a seed from the list, or type one above to preview it." : "Could not preview this seed. See godot.log.");
+    }
+
+    private void RefreshUseButton()
+    {
+        bool isSelected = _shown != null && _selectedSeed.Length > 0 && string.Equals(_shown.Seed, _selectedSeed, StringComparison.OrdinalIgnoreCase);
+        _useButton.Disabled = _shown == null || isSelected;
+        _useButton.Text = isSelected ? "Seed Selected" : (_isStandardRun ? "Use in Standard Run" : "Use this seed");
     }
 
     // ---- bookmarks ----
@@ -510,7 +519,9 @@ public sealed class SeedSearchScreen
             return;
 
         _applySeed(_shown.Seed);
-        Close();
+        _selectedSeed = _shown.Seed;
+        RefreshUseButton();
+        _status.Text = $"Seed {_shown.Seed} selected.";
     }
 
     private void Close()

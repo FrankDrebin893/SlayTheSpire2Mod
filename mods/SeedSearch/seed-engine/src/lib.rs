@@ -20,7 +20,7 @@ use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::Arc;
 
 /// Bumped whenever the snapshot, filter or result formats change.
-pub const ABI_VERSION: u32 = 3;
+pub const ABI_VERSION: u32 = 4;
 
 pub struct Engine {
     snap: Arc<Snapshot>,

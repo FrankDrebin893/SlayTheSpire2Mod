@@ -1,3 +1,5 @@
+using MegaCrit.Sts2.Core.Entities.Relics;
+
 namespace RasmusSlayTheSpire2Mod.SeedSearch;
 
 // Whether a filter can hold together with the ones already there. The pickers only offer what a
@@ -17,7 +19,7 @@ public static class Feasibility
         }
 
         List<Cond> all = [.. existing, candidate];
-        return Neow(d, all) ?? Gives(d, all) ?? Crowding(d, all);
+        return Neow(d, all) ?? Gives(d, all) ?? Shop(d, all) ?? Crowding(d, all);
     }
 
     // Two filters of which only one can hold. Asked both ways round.
@@ -31,8 +33,11 @@ public static class Feasibility
         // RunManager.GenerateRooms picks the second boss from the others.
         (SecondBossCond x, BossCond y) => y.Slot == d.SlotActs.Length - 1 && x.Encounter == y.Encounter,
         (MapCountCond x, MapCountCond y) => x.Slot == y.Slot && x.PointType == y.PointType && (x.Max < y.Min || y.Max < x.Min),
+        (MapPathCond x, MapPathCond y) => x.Slot == y.Slot && x.PointType == y.PointType && (x.Max < y.Min || y.Max < x.Min),
+        (MapPathCond x, MapCountCond y) => x.Slot == y.Slot && x.PointType == y.PointType && x.Min > y.Max,
         (ActCond x, BossCond y) => x.Slot == y.Slot && !d.ActInfos[x.Act].Boss.Contains(y.Encounter),
         (ActCond x, AncientCond y) => x.Slot == y.Slot && !d.ActInfos[x.Act].Ancients.Contains(y.Ancient) && !(x.Slot > 0 && d.SharedAncients.Contains(y.Ancient)),
+        (AncientCond x, AncientRelicCond y) => x.Slot == y.Slot && !d.AncientRelicOptions(x.Slot, x.Ancient).Contains(y.Relic),
         (ActCond x, EventCond y) => x.Slot == y.Slot && !d.ActInfos[x.Act].Events.Contains(y.Event),
         (ActCond x, EncounterCond y) => x.Slot == y.Slot && !FightsOf(d.ActInfos[x.Act], y.Elite, y.WithinFirst).Contains(y.Encounter),
         _ => false
@@ -49,6 +54,8 @@ public static class Feasibility
             NeowOfferCond o => o.Relic,
             NeowGivesCond g => g.Relic,
             NeowNestedCond n => n.Relic,
+            AncientRelicCond { Slot: 0 } a => a.Relic,
+            RewardCardCond { AfterNeow: { } an } => an,
             _ => -1
         }).Where(r => r >= 0).Distinct().ToArray();
 
@@ -62,14 +69,24 @@ public static class Feasibility
                 return $"Neow never offers {d.RelicName(pair[0])} together with {d.RelicName(pair[1])}.";
         }
 
+        for (int slot = 1; slot < d.SlotActs.Length; slot++)
+        {
+            int s = slot;
+            if (all.OfType<AncientRelicCond>().Where(c => c.Slot == s).Select(c => c.Relic).Distinct().Count() > 3)
+                return $"The Act {slot + 1} Ancient offers only 3 relics.";
+        }
+
         return null;
     }
 
     // More different things asked of a relic, or of the first card reward, than it hands out.
     private static string? Gives(GameData d, List<Cond> all)
     {
-        if (all.OfType<RewardCardCond>().Count() > RewardCards)
-            return $"The first card reward has only {RewardCards} cards.";
+        foreach (var group in all.OfType<RewardCardCond>().GroupBy(c => c.AfterNeow))
+        {
+            if (group.Select(c => c.Card).Distinct().Count() > RewardCards)
+                return $"A combat card reward has only {RewardCards} cards.";
+        }
 
         // What is asked of each relic: of a Neow offer directly, or of a relic Neow's Bones gives.
         var asked = all.OfType<NeowGivesCond>().Select(c => (Path: (c.Relic, Via: -1), c.What, c.Item))
@@ -92,6 +109,23 @@ public static class Feasibility
         return null;
     }
 
+    private static string? Shop(GameData d, List<Cond> all)
+    {
+        ShopItemCond[] shop = all.OfType<ShopItemCond>().ToArray();
+        int[] relics = shop.Where(c => c.What == GiveItem.Relic).Select(c => c.Item).Distinct().ToArray();
+        if (relics.Length > 3)
+            return "The merchant shop sells only 3 relics.";
+        if (relics.Count(r => d.Relics[r].Rarity == RelicRarity.Shop) > 1)
+            return "The merchant shop has only 1 Shop-rarity relic slot.";
+        if (relics.Count(r => d.Relics[r].Rarity != RelicRarity.Shop) > 2)
+            return "The merchant shop has only 2 regular relic slots.";
+        if (shop.Where(c => c.What == GiveItem.Potion).Select(c => c.Item).Distinct().Count() > 3)
+            return "The merchant shop sells only 3 potions.";
+        if (shop.Where(c => c.What == GiveItem.Card).Select(c => c.Item).Distinct().Count() > 7)
+            return "The merchant shop sells at most 7 cards.";
+        return null;
+    }
+
     // More different things asked for within the first N of a list than fit there.
     private static string? Crowding(GameData d, List<Cond> all)
     {
@@ -101,6 +135,8 @@ public static class Feasibility
             return "More fights are asked for that early than fit.";
         if (all.OfType<RelicCond>().GroupBy(c => (c.Shared, d.Relics[c.Relic].Rarity)).Any(g => Crowded(g.DistinctBy(c => c.Relic).Select(c => c.WithinFirst))))
             return "More relics of one rarity are asked for that early than fit.";
+        if (Crowded(all.OfType<TreasureRelicCond>().DistinctBy(c => c.Relic).Select(c => c.WithinFirst)))
+            return "More treasure chest relics are asked for that early than fit.";
 
         // The weak fights of an act only fill its first few rooms.
         foreach (IGrouping<int, EncounterCond> slot in all.OfType<EncounterCond>().Where(c => !c.Elite).GroupBy(c => c.Slot))

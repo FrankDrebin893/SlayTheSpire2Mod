@@ -103,14 +103,36 @@ impl Rng {
         }
     }
 
-    /// `ListExtensions.UnstableShuffle` (and `Rng.Shuffle`, which is the same walk).
-    pub fn shuffle<T>(&mut self, list: &mut [T]) {
+    /// `ListExtensions.UnstableShuffle`: always draws one `u64` sub-seed from `self`
+    /// (even when `list.len() <= 1`), constructs a child `Rng::new(sub_seed)`, and runs
+    /// Fisher-Yates on the child `Rng`.
+    pub fn unstable_shuffle<T>(&mut self, list: &mut [T]) {
+        let sub_seed = self.next_u64();
+        let mut child = Rng::new(sub_seed);
         let mut n = list.len();
         while n > 1 {
             n -= 1;
-            let k = self.next_int(n as i32 + 1) as usize;
+            let k = child.next_int(n as i32 + 1) as usize;
             list.swap(k, n);
         }
+    }
+
+    /// Alias for `unstable_shuffle`.
+    #[inline]
+    pub fn shuffle<T>(&mut self, list: &mut [T]) {
+        self.unstable_shuffle(list);
+    }
+
+    /// `ListExtensions.StableShuffle`: sorts `list` first, then calls `unstable_shuffle`.
+    pub fn stable_shuffle<T: Ord>(&mut self, list: &mut [T]) {
+        list.sort();
+        self.unstable_shuffle(list);
+    }
+
+    /// `ListExtensions.StableShuffle` with custom comparator.
+    pub fn stable_shuffle_by<T, F: FnMut(&T, &T) -> std::cmp::Ordering>(&mut self, list: &mut [T], cmp: F) {
+        list.sort_by(cmp);
+        self.unstable_shuffle(list);
     }
 }
 
@@ -135,10 +157,16 @@ mod tests {
     }
 
     #[test]
-    fn shuffle_is_a_permutation() {
-        let mut rng = Rng::new(42);
+    fn shuffle_is_a_permutation_and_advances_once() {
+        let mut rng1 = Rng::new(42);
+        let mut rng2 = Rng::new(42);
+        let _ = rng2.next_u64();
+
         let mut v: Vec<u32> = (0..50).collect();
-        rng.shuffle(&mut v);
+        rng1.unstable_shuffle(&mut v);
+        // Parent RNG only advanced by 1 u64!
+        assert_eq!(rng1.next_u64(), rng2.next_u64());
+
         let mut sorted = v.clone();
         sorted.sort();
         assert_eq!(sorted, (0..50).collect::<Vec<_>>());

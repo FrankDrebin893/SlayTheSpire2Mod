@@ -70,8 +70,9 @@ pub struct NeowData {
     pub claw: Option<u32>,
     /// Relics in the player bag for which IsAllowed is false at the start of a run.
     pub bag_disallowed: Vec<u32>,
-    /// [relic, n]: relics of the player bag that shuffle n cards of the deck on the niche stream
-    /// when they are obtained (War Paint, Whetstone), with n counted in the starter deck.
+    /// [relic, n]: relics of the player bag that shuffle n cards of the deck on the
+    /// non_combat_generation stream when they are obtained (War Paint, Whetstone), with n counted
+    /// in the starter deck.
     pub bag_shuffles: Vec<[u32; 2]>,
 }
 
@@ -105,6 +106,41 @@ pub struct CardData {
     pub id: u32,
     /// CardRarity as int
     pub rarity: u8,
+    /// CardType as int (1 = Attack, 2 = Skill, 3 = Power)
+    #[serde(default)]
+    pub card_type: u8,
+}
+
+#[derive(Deserialize, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AncientKind {
+    Neow,
+    Orobas,
+    ThreePools,
+    ShuffleThree,
+    Darv,
+    Other,
+}
+
+#[derive(Deserialize)]
+pub struct AncientDef {
+    pub id: u32,
+    pub entry: String,
+    pub kind: AncientKind,
+    #[serde(default)]
+    pub pool1: Vec<u32>,
+    #[serde(default)]
+    pub pool2: Vec<u32>,
+    #[serde(default)]
+    pub pool3: Vec<u32>,
+    #[serde(default)]
+    pub other_char_count: usize,
+    #[serde(default)]
+    pub prismatic_gem: u32,
+    #[serde(default)]
+    pub sea_glass: u32,
+    #[serde(default)]
+    pub dusty_tome: u32,
 }
 
 #[derive(Deserialize)]
@@ -131,4 +167,23 @@ pub struct Snapshot {
     pub map_elites: i32,
     pub map_shops: i32,
     pub double_boss: bool,
+    /// Definitions for all Ancients (Act 1 Neow + Act 2/3 Ancients).
+    #[serde(default)]
+    pub ancient_defs: Vec<AncientDef>,
+    /// Relics in `shared_bag` for which `IsAllowed(runState)` is false.
+    #[serde(default)]
+    pub shared_bag_disallowed: Vec<u32>,
+    /// Relics in `player_bag` for which `!IsAllowed(runState) || !IsAllowedInShops`.
+    #[serde(default)]
+    pub shop_disallowed: Vec<u32>,
+    /// Unlocked character cards allowed in the merchant shop (`Rarity != Basic && IsAllowedInRun`).
+    #[serde(default)]
+    pub shop_cards: Vec<CardData>,
+    /// Unlocked colorless cards allowed in the merchant shop (`Rarity != Basic && IsAllowedInRun`).
+    #[serde(default)]
+    pub shop_colorless: Vec<CardData>,
+    #[serde(default)]
+    pub shop_rare_odds: f32,
+    #[serde(default)]
+    pub shop_uncommon_odds: f32,
 }

@@ -6,7 +6,7 @@
 
 use crate::data::{ActData, Roll, Snapshot};
 use crate::rng::Rng;
-use std::collections::{HashMap, VecDeque};
+use std::collections::HashMap;
 use std::hash::{BuildHasherDefault, Hasher};
 
 pub const COLS: usize = 7;
@@ -78,11 +78,26 @@ pub struct MapOut {
     pub points: Vec<(i32, i32, u8)>,
     /// (col, row) -> (col, row) between grid points.
     pub edges: Vec<(i32, i32, i32, i32)>,
+    /// Maximum count of each node type reachable on a single legal path from start to boss.
+    pub max_path_elites: i32,
+    pub max_path_rests: i32,
+    pub max_path_shops: i32,
+    pub max_path_unknowns: i32,
 }
 
 impl MapOut {
     pub fn count(&self, ty: u8) -> i32 {
         self.points.iter().filter(|p| p.2 == ty).count() as i32
+    }
+
+    pub fn max_on_path(&self, ty: u8) -> i32 {
+        match ty {
+            ELITE => self.max_path_elites,
+            REST => self.max_path_rests,
+            SHOP => self.max_path_shops,
+            UNKNOWN => self.max_path_unknowns,
+            _ => 0,
+        }
     }
 }
 
@@ -230,7 +245,7 @@ impl Gen<'_> {
         let right = (col + 1).min(6);
         // StableShuffle of an already sorted list.
         let mut dirs = [-1, 0, 1];
-        self.rng.shuffle(&mut dirs);
+        self.rng.unstable_shuffle(&mut dirs);
         for d in dirs {
             let target = match d {
                 -1 => left,
@@ -264,10 +279,10 @@ impl Gen<'_> {
             }
         }
 
-        let mut queue: VecDeque<u8> = VecDeque::new();
+        let mut queue: Vec<u8> = Vec::new();
         for (n, ty) in [(counts.rests, REST), (counts.shops, SHOP), (counts.elites, ELITE), (counts.unknowns, UNKNOWN)] {
             for _ in 0..n {
-                queue.push_back(ty);
+                queue.push(ty);
             }
         }
 
@@ -276,8 +291,10 @@ impl Gen<'_> {
             if queue.is_empty() {
                 break;
             }
+            // `all_points()` is already in `(col, row)` order (`MapPoint.CompareTo`), so
+            // `StableShuffle` is simply `unstable_shuffle`.
             let mut list: Vec<P> = self.all_points().into_iter().filter(|&p| self.pts[p].ty == UNASSIGNED).collect();
-            self.rng.shuffle(&mut list);
+            self.rng.unstable_shuffle(&mut list);
             for p in list {
                 if queue.is_empty() {
                     break;
@@ -295,15 +312,14 @@ impl Gen<'_> {
         self.pts[self.start].ty = ANCIENT;
     }
 
-    fn next_valid_type(&self, queue: &mut VecDeque<u8>, p: P) -> u8 {
-        for _ in 0..queue.len() {
-            let Some(ty) = queue.pop_front() else { break };
-            if self.is_valid_type(ty, p) {
-                return ty;
-            }
-            queue.push_back(ty);
+    /// `StandardActMap.GetNextValidPointType`: scans the queue in priority order, removes the
+    /// first valid point type, and preserves the exact order of all remaining items.
+    fn next_valid_type(&self, queue: &mut Vec<u8>, p: P) -> u8 {
+        if let Some(idx) = queue.iter().position(|&ty| self.is_valid_type(ty, p)) {
+            queue.remove(idx)
+        } else {
+            UNASSIGNED
         }
-        UNASSIGNED
     }
 
     fn is_valid_type(&self, ty: u8, p: P) -> bool {
@@ -312,8 +328,8 @@ impl Gen<'_> {
         if pt.row >= self.map_len - 3 && ty == REST {
             return false;
         }
-        // IsValidForLower
-        if pt.row < 6 && (ty == REST || ty == ELITE) {
+        // IsValidForLower (_lowestRowByPointType: RestSite = 5, Elite = 6)
+        if (ty == REST && pt.row < 5) || (ty == ELITE && pt.row < 6) {
             return false;
         }
         // IsValidWithParents / IsValidWithChildren
@@ -355,7 +371,7 @@ impl Gen<'_> {
             return false;
         }
         let mut list: Vec<P> = all.into_iter().filter(|&p| self.pts[p].ty == MONSTER && self.pts[p].can_modify).collect();
-        self.rng.shuffle(&mut list);
+        self.rng.unstable_shuffle(&mut list);
         let mut changed = false;
         for p in list {
             if missing == 0 {
@@ -403,13 +419,6 @@ impl Gen<'_> {
     }
 
     /// MapPathPruning.FindMatchingSegments.
-    ///
-    /// The game lists every start-to-boss path and takes every sub-path of each as a candidate
-    /// segment, so a segment shared by many paths is looked at again and again; repeats change
-    /// nothing, because a segment always overlaps itself. Segments with the same key share their
-    /// first and last point, and the first path containing a given segment is the first path to
-    /// its starting point followed by it, so walking each starting point's descendants depth
-    /// first visits the segments of every key in the game's order, once each.
     fn find_matching_segments(&self) -> Vec<Vec<Vec<P>>> {
         let mut reachable = vec![false; self.pts.len()];
         let mut stack = vec![self.start];
@@ -419,9 +428,6 @@ impl Gen<'_> {
             }
         }
 
-        // Collected under a compact key (first point, last point, the point types packed four
-        // bits each); only the groups that survive get the game's string key, which decides
-        // the order they are pruned in.
         let mut segments: HashMap<(P, P, u128), Vec<Vec<P>>, BuildHasherDefault<KeyHasher>> = HashMap::default();
         let mut path = Vec::with_capacity(self.map_len as usize + 2);
         for start in 0..self.pts.len() {
@@ -458,7 +464,7 @@ impl Gen<'_> {
 
     fn prune_paths(&mut self, matching: &mut [Vec<Vec<P>>]) -> bool {
         for matches in matching.iter_mut() {
-            self.rng.shuffle(matches);
+            self.rng.unstable_shuffle(matches);
             if self.prune_all_but_last(matches) != 0 {
                 return true;
             }
@@ -649,6 +655,32 @@ impl Gen<'_> {
         }
     }
 
+    fn max_path_count(&self, target_ty: u8) -> i32 {
+        let mut dp = vec![-1i32; self.pts.len()];
+        dp[self.start] = 0;
+        for row in 1..self.map_len {
+            for p in self.row_points(row) {
+                let best_parent = self.pts[p]
+                    .parents
+                    .iter()
+                    .map(|u| dp[u])
+                    .filter(|&v| v >= 0)
+                    .max()
+                    .unwrap_or(-1);
+                if best_parent >= 0 {
+                    dp[p] = best_parent + if self.pts[p].ty == target_ty { 1 } else { 0 };
+                }
+            }
+        }
+        self.pts[self.boss]
+            .parents
+            .iter()
+            .map(|u| dp[u])
+            .filter(|&v| v >= 0)
+            .max()
+            .unwrap_or(0)
+    }
+
     fn output(&self) -> MapOut {
         let all = self.all_points();
         let points = all.iter().map(|&p| (self.pts[p].col, self.pts[p].row, self.pts[p].ty)).collect();
@@ -661,7 +693,14 @@ impl Gen<'_> {
             }
         }
         edges.sort_unstable();
-        MapOut { points, edges }
+        MapOut {
+            points,
+            edges,
+            max_path_elites: self.max_path_count(ELITE),
+            max_path_rests: self.max_path_count(REST),
+            max_path_shops: self.max_path_count(SHOP),
+            max_path_unknowns: self.max_path_count(UNKNOWN),
+        }
     }
 }
 

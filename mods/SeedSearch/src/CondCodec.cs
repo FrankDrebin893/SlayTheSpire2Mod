@@ -103,6 +103,11 @@ public static class CondCodec
                 w.WriteNumber("slot", c.Slot);
                 w.WriteString("ancient", d.Ancients[c.Ancient].Id.Entry);
                 break;
+            case AncientRelicCond c:
+                w.WriteString("kind", "ancient_relic");
+                w.WriteNumber("slot", c.Slot);
+                w.WriteString("relic", d.Relics[c.Relic].Id.Entry);
+                break;
             case EventCond c:
                 w.WriteString("kind", "event");
                 w.WriteNumber("slot", c.Slot);
@@ -121,8 +126,25 @@ public static class CondCodec
                 w.WriteString("relic", d.Relics[c.Relic].Id.Entry);
                 w.WriteNumber("within", c.WithinFirst);
                 break;
+            case TreasureRelicCond c:
+                w.WriteString("kind", "treasure_relic");
+                w.WriteString("relic", d.Relics[c.Relic].Id.Entry);
+                w.WriteNumber("within", c.WithinFirst);
+                break;
+            case ShopItemCond c:
+                w.WriteString("kind", "shop_item");
+                w.WriteString("what", c.What.ToString());
+                w.WriteString("item", ItemEntry(d, c.What, c.Item));
+                break;
             case MapCountCond c:
                 w.WriteString("kind", "map_count");
+                w.WriteNumber("slot", c.Slot);
+                w.WriteString("point_type", ((MapPointType)c.PointType).ToString());
+                w.WriteNumber("min", c.Min);
+                w.WriteNumber("max", c.Max);
+                break;
+            case MapPathCond c:
+                w.WriteString("kind", "map_path_count");
                 w.WriteNumber("slot", c.Slot);
                 w.WriteString("point_type", ((MapPointType)c.PointType).ToString());
                 w.WriteNumber("min", c.Min);
@@ -131,10 +153,25 @@ public static class CondCodec
             case RewardCardCond c:
                 w.WriteString("kind", "reward_card");
                 w.WriteString("card", d.Cards[c.Card].Id.Entry);
+                if (c.AfterNeow is { } afterRelic)
+                    w.WriteString("after_neow", d.Relics[afterRelic].Id.Entry);
                 break;
             case RewardPotionCond c:
                 w.WriteString("kind", "reward_potion");
                 w.WriteBoolean("present", c.Present);
+                break;
+            case AnyOfCond c:
+                w.WriteString("kind", "any_of");
+                w.WriteStartArray("conds");
+                foreach (Cond sub in c.Conds)
+                {
+                    w.WriteStartObject();
+                    w.WriteString("text", sub.Describe(d));
+                    Write(w, sub, d);
+                    w.WriteEndObject();
+                }
+
+                w.WriteEndArray();
                 break;
             default:
                 throw new NotSupportedException($"Filter {cond.GetType().Name} cannot be saved.");
@@ -191,6 +228,10 @@ public static class CondCodec
                 return d.DoubleBoss && Encounter() is { } second ? new SecondBossCond(second) : null;
             case "ancient":
                 return Slot() is { } ancientSlot && d.Ancients.Find(Str("ancient")) is { } ancient ? new AncientCond(ancientSlot, ancient) : null;
+            case "ancient_relic":
+                return Slot() is { } arSlot && d.Relics.Find(Str("relic")) is { } arRelic && d.AncientRelicOptions(arSlot).Contains(arRelic)
+                    ? new AncientRelicCond(arSlot, arRelic)
+                    : null;
             case "event":
                 return Slot() is { } eventSlot && d.Events.Find(Str("event")) is { } ev ? new EventCond(eventSlot, ev, Int("within")) : null;
             case "elite" or "normal":
@@ -202,6 +243,22 @@ public static class CondCodec
                 bool shared = e.GetProperty("shared").GetBoolean();
                 return d.Relics.Find(Str("relic")) is { } r && (shared ? d.SharedBagDealt : d.PlayerBag).Contains(r) ? new RelicCond(shared, r, Int("within")) : null;
             }
+            case "treasure_relic":
+                return d.Relics.Find(Str("relic")) is { } tr && d.TreasureRelicOptions.Contains(tr)
+                    ? new TreasureRelicCond(tr, Int("within"))
+                    : null;
+            case "shop_item":
+            {
+                if (!Enum.TryParse(Str("what"), true, out GiveItem what) || Item(what) is not { } shopItem)
+                    return null;
+                bool valid = what switch
+                {
+                    GiveItem.Card => d.ShopCardOptions.Contains(shopItem),
+                    GiveItem.Relic => d.ShopRelicOptions.Contains(shopItem),
+                    _ => d.PotionOptions.Contains(shopItem)
+                };
+                return valid ? new ShopItemCond(what, shopItem) : null;
+            }
             case "map_count":
             {
                 if (Slot() is not { } mapSlot || !Enum.TryParse(Str("point_type"), out MapPointType point))
@@ -209,10 +266,40 @@ public static class CondCodec
                 int index = Array.FindIndex(Visuals.MapTypes, t => t.Type == (int)point);
                 return index < 0 ? null : new MapCountCond(mapSlot, (int)point, Visuals.MapTypes[index].Name, Int("min"), Int("max"));
             }
+            case "map_path_count":
+            {
+                if (Slot() is not { } pathSlot || !Enum.TryParse(Str("point_type"), out MapPointType point))
+                    return null;
+                int index = Array.FindIndex(Visuals.MapTypes, t => t.Type == (int)point);
+                return index < 0 ? null : new MapPathCond(pathSlot, (int)point, Visuals.MapTypes[index].Name, Int("min"), Int("max"));
+            }
             case "reward_card":
-                return d.Cards.Find(Str("card")) is { } card && d.FirstRewardCards.Contains(card) ? new RewardCardCond(card) : null;
+            {
+                if (d.Cards.Find(Str("card")) is not { } card || !d.RewardCards.Contains(card))
+                    return null;
+                int? afterNeow = null;
+                if (e.TryGetProperty("after_neow", out JsonElement an))
+                {
+                    string entry = an.GetString() ?? "";
+                    if (d.Relics.Find(entry) is { } r && d.NeowRelics.Contains(r))
+                        afterNeow = r;
+                    else
+                        return null;
+                }
+                else if (!d.FirstRewardCards.Contains(card))
+                {
+                    return null;
+                }
+
+                return new RewardCardCond(card, afterNeow);
+            }
             case "reward_potion":
                 return new RewardPotionCond(e.GetProperty("present").GetBoolean());
+            case "any_of":
+            {
+                Cond[] subs = e.GetProperty("conds").EnumerateArray().Select(s => ReadOne(s, d)).OfType<Cond>().ToArray();
+                return subs.Length == 0 ? null : subs.Length == 1 ? subs[0] : new AnyOfCond(subs);
+            }
             default:
                 return null;
         }

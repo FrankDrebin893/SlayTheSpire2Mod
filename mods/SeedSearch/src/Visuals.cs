@@ -11,7 +11,13 @@ namespace RasmusSlayTheSpire2Mod.SeedSearch;
 
 // How one game thing is shown: its name, the game's own icon for it, a frame colour, and the text
 // and larger picture for the info panel, both only fetched when it is hovered.
-public sealed record Visual(string Name, Texture2D? Icon, Color Frame, Func<string>? Describe = null, Func<Texture2D?>? Big = null);
+public sealed record Visual(
+    string Name,
+    Texture2D? Icon,
+    Color Frame,
+    Func<string>? Describe = null,
+    Func<Texture2D?>? Big = null,
+    bool Highlighted = false);
 
 // The look of the seed search screen: its theme, the game art for each kind of id in a GameData,
 // and the tiles built from them. Stock Godot nodes only.
@@ -21,6 +27,8 @@ public static class Visuals
     public static readonly Color PanelColor = new(0.13f, 0.15f, 0.2f);
     public static readonly Color InsetColor = new(0.09f, 0.1f, 0.14f);
     public static readonly Color Accent = new(0.95f, 0.78f, 0.35f);
+    public static readonly Color HighlightFill = new(0.26f, 0.22f, 0.10f);
+    public static readonly Color HighlightBorder = new(1.0f, 0.86f, 0.38f);
     public static readonly Color Muted = new(0.68f, 0.71f, 0.78f);
     public static readonly Color Plain = new(0.25f, 0.28f, 0.35f);
     public static readonly Color Cursed = new(0.85f, 0.3f, 0.3f);
@@ -41,7 +49,7 @@ public static class Visuals
         ((int)MapPointType.Treasure, RoomType.Treasure, "treasures", new Color(0.5f, 0.85f, 0.5f))
     ];
 
-    private static readonly Dictionary<Color, (StyleBoxFlat Normal, StyleBoxFlat Hover, StyleBoxFlat Pressed)> TileStyles = new();
+    private static readonly Dictionary<(Color, bool), (StyleBoxFlat Normal, StyleBoxFlat Hover, StyleBoxFlat Pressed)> TileStyles = new();
 
     // ---- theme and plain building blocks ----
 
@@ -129,13 +137,13 @@ public static class Visuals
     public static Button Tile(Visual v, Action<Visual> hover, int width = 104, int height = 96)
     {
         Button tile = IconButton(v, hover);
-        // The name is already under the art.
-        tile.TooltipText = "";
-        tile.Text = v.Name;
+        tile.Text = v.Highlighted ? $"★ {v.Name}" : v.Name;
         tile.CustomMinimumSize = new Vector2(width, height);
         tile.VerticalIconAlignment = VerticalAlignment.Top;
         tile.IconAlignment = HorizontalAlignment.Center;
         tile.AddThemeFontSizeOverride("font_size", 13);
+        if (v.Highlighted)
+            tile.AddThemeColorOverride("font_color", HighlightBorder);
         return tile;
     }
 
@@ -147,7 +155,7 @@ public static class Visuals
         icon.IconAlignment = HorizontalAlignment.Center;
         if (v.Icon == null)
         {
-            icon.Text = v.Name;
+            icon.Text = v.Highlighted ? $"★ {v.Name}" : v.Name;
             icon.AddThemeFontSizeOverride("font_size", 13);
         }
 
@@ -161,24 +169,29 @@ public static class Visuals
         pill.ExpandIcon = false;
         pill.ClipText = false;
         pill.TextOverrunBehavior = TextServer.OverrunBehavior.NoTrimming;
-        pill.Text = text ?? v.Name;
+        string labelText = text ?? v.Name;
+        pill.Text = v.Highlighted ? $"★ {labelText}" : labelText;
         pill.AddThemeConstantOverride("icon_max_width", 22);
         pill.AddThemeFontSizeOverride("font_size", 16);
+        if (v.Highlighted)
+            pill.AddThemeColorOverride("font_color", HighlightBorder);
         return pill;
     }
 
     private static Button IconButton(Visual v, Action<Visual> hover)
     {
+        string desc = v.Describe?.Invoke() ?? "";
+        string tooltip = desc.Length > 0 ? $"{v.Name}\n{desc}" : v.Name;
         Button button = new()
         {
             Icon = v.Icon,
             ExpandIcon = true,
             ClipText = true,
             TextOverrunBehavior = TextServer.OverrunBehavior.TrimEllipsis,
-            TooltipText = v.Name,
+            TooltipText = tooltip,
             FocusMode = Control.FocusModeEnum.None
         };
-        (StyleBoxFlat normal, StyleBoxFlat hovered, StyleBoxFlat pressed) = StylesFor(v.Frame);
+        (StyleBoxFlat normal, StyleBoxFlat hovered, StyleBoxFlat pressed) = StylesFor(v.Frame, v.Highlighted);
         button.AddThemeStyleboxOverride("normal", normal);
         button.AddThemeStyleboxOverride("hover", hovered);
         button.AddThemeStyleboxOverride("pressed", pressed);
@@ -187,14 +200,24 @@ public static class Visuals
         return button;
     }
 
-    private static (StyleBoxFlat, StyleBoxFlat, StyleBoxFlat) StylesFor(Color frame)
+    private static (StyleBoxFlat, StyleBoxFlat, StyleBoxFlat) StylesFor(Color frame, bool highlighted)
     {
-        if (!TileStyles.TryGetValue(frame, out var styles))
+        if (!TileStyles.TryGetValue((frame, highlighted), out var styles))
         {
             StyleBoxFlat pressed = Box(new Color(0.24f, 0.21f, 0.12f), Accent, 4);
             pressed.SetBorderWidthAll(3);
-            styles = (Box(TileFill, frame, 4), Box(TileHover, frame.Lightened(0.3f), 4), pressed);
-            TileStyles[frame] = styles;
+            Color fill = highlighted ? HighlightFill : TileFill;
+            Color border = highlighted ? HighlightBorder : frame;
+            StyleBoxFlat normal = Box(fill, border, 4);
+            StyleBoxFlat hover = Box(highlighted ? HighlightFill.Lightened(0.12f) : TileHover, border.Lightened(0.3f), 4);
+            if (highlighted)
+            {
+                normal.SetBorderWidthAll(3);
+                hover.SetBorderWidthAll(3);
+            }
+
+            styles = (normal, hover, pressed);
+            TileStyles[(frame, highlighted)] = styles;
         }
 
         return styles;
@@ -240,7 +263,7 @@ public static class Visuals
         }
     }
 
-    public static Visual Relic(GameData d, int id, bool cursed = false)
+    public static Visual Relic(GameData d, int id, bool cursed = false, bool highlighted = false)
     {
         if (id < 0)
             return new Visual("?", null, Plain);
@@ -256,11 +279,12 @@ public static class Visuals
             };
         string entry = relic.Id.Entry.ToLowerInvariant();
         return new Visual(d.RelicName(id), Load(relic.PackedIconPath), frame,
-            () => Text(() => relic.DynamicDescription.GetFormattedText()),
-            () => Load(ImageHelper.GetImagePath($"relics/{entry}.png")) ?? Load(ImageHelper.GetImagePath($"relics/beta/{entry}.png")));
+            () => $"{relic.Rarity} Relic\n{Text(() => relic.DynamicDescription.GetFormattedText())}",
+            () => Load(ImageHelper.GetImagePath($"relics/{entry}.png")) ?? Load(ImageHelper.GetImagePath($"relics/beta/{entry}.png")),
+            highlighted);
     }
 
-    public static Visual Card(GameData d, int id)
+    public static Visual Card(GameData d, int id, bool highlighted = false)
     {
         CardModel card = d.Cards[id];
         Color frame = card.Rarity switch
@@ -271,29 +295,34 @@ public static class Visuals
             _ => CommonColor
         };
         Texture2D? portrait = Load(Safe(() => card.PortraitPath)) ?? Load(Safe(() => card.BetaPortraitPath)) ?? Load(CardModel.MissingPortraitPath);
+        string? owner = d.CardOwner(id);
+        string prefix = owner != null ? $"{owner} · {card.Rarity} {card.Type}" : $"{card.Rarity} {card.Type}";
         return new Visual(d.CardName(id), portrait, frame,
-            () => $"{card.Rarity} {card.Type}\n{Text(() => card.GetDescriptionForPile(PileType.None))}");
+            () => $"{prefix}\n{Text(() => card.GetDescriptionForPile(PileType.None))}",
+            null,
+            highlighted);
     }
 
-    public static Visual Potion(GameData d, int id)
+    public static Visual Potion(GameData d, int id, bool highlighted = false)
     {
         if (id < 0)
-            return new Visual("No potion", null, Plain);
+            return new Visual("No potion", null, Plain, null, null, highlighted);
         PotionModel potion = d.Potions[id];
         return new Visual(d.PotionName(id), Load(potion.ImagePath), UncommonColor,
-            () => Text(() => potion.DynamicDescription.GetFormattedText()),
-            () => Load(potion.LargeImagePath));
+            () => $"{potion.Rarity} Potion\n{Text(() => potion.DynamicDescription.GetFormattedText())}",
+            () => Load(potion.LargeImagePath),
+            highlighted);
     }
 
-    public static Visual Ancient(GameData d, int id)
+    public static Visual Ancient(GameData d, int id, bool highlighted = false)
     {
         if (id < 0)
             return new Visual("No ancient", null, Plain);
-        return new Visual(d.AncientName(id), RoomIcon(MapPointType.Ancient, RoomType.Event, d.Ancients[id].Id), Accent, () => "Ancient");
+        return new Visual(d.AncientName(id), RoomIcon(MapPointType.Ancient, RoomType.Event, d.Ancients[id].Id), Accent, () => "Ancient Event", null, highlighted);
     }
 
     // Only bosses have art of their own; fights and elites share the icon of their room type.
-    public static Visual Encounter(GameData d, int id, RoomType room)
+    public static Visual Encounter(GameData d, int id, RoomType room, bool highlighted = false)
     {
         if (id < 0)
             return new Visual("None", null, Plain);
@@ -312,15 +341,18 @@ public static class Visuals
             _ => CommonColor
         };
         return new Visual(d.EncounterName(id), icon, frame,
-            () => $"{room}\n{Text(() => string.Join(", ", encounter.AllPossibleMonsters.Select(m => m.Title.GetFormattedText()).Distinct()))}");
+            () => $"{room}\n{Text(() => string.Join(", ", encounter.AllPossibleMonsters.Select(m => m.Title.GetFormattedText()).Distinct()))}",
+            null,
+            highlighted);
     }
 
-    public static Visual Event(GameData d, int id)
+    public static Visual Event(GameData d, int id, bool highlighted = false)
     {
         EventModel ev = d.Events[id];
         return new Visual(d.EventName(id), RoomIcon(MapPointType.Unknown, RoomType.Event, null), Plain,
             () => Text(() => ev.InitialDescription.GetFormattedText()),
-            () => Load(ImageHelper.GetImagePath($"events/{ev.Id.Entry.ToLowerInvariant()}.png")));
+            () => Load(ImageHelper.GetImagePath($"events/{ev.Id.Entry.ToLowerInvariant()}.png")),
+            highlighted);
     }
 
     public static Visual MapType(int index, string? name = null)
@@ -335,7 +367,7 @@ public static class Visuals
         return index < 0 ? null : RoomIcon((MapPointType)pointType, MapTypes[index].Room, null);
     }
 
-    public static Visual Named(string name, Texture2D? icon = null) => new(name, icon, Plain);
+    public static Visual Named(string name, Texture2D? icon = null, bool highlighted = false) => new(name, icon, Plain, null, null, highlighted);
 
     public static Texture2D? CharacterIcon(CharacterModel character) =>
         Load(ImageHelper.GetImagePath($"ui/top_panel/character_icon_{character.Id.Entry.ToLowerInvariant()}.png"));
@@ -390,21 +422,21 @@ public sealed class InfoPanel
 {
     private readonly TextureRect _art = new()
     {
-        CustomMinimumSize = new Vector2(0, 190),
+        CustomMinimumSize = new Vector2(0, 140),
         ExpandMode = TextureRect.ExpandModeEnum.IgnoreSize,
         StretchMode = TextureRect.StretchModeEnum.KeepAspectCentered
     };
-    private readonly Label _title = Visuals.SectionTitle("", 22);
-    private readonly Label _text = Visuals.MutedLabel("Hover over an icon to see what it is.");
+    private readonly Label _title = Visuals.SectionTitle("", 20);
+    private readonly Label _text = Visuals.MutedLabel("Hover over any icon to see its full description.", 15);
     private Visual? _shown;
 
     public PanelContainer Root { get; } = Visuals.Panel(Visuals.InsetColor, 10);
 
     public InfoPanel()
     {
-        Root.CustomMinimumSize = new Vector2(0, 420);
+        Root.CustomMinimumSize = new Vector2(0, 290);
         VBoxContainer column = new();
-        column.AddThemeConstantOverride("separation", 8);
+        column.AddThemeConstantOverride("separation", 6);
         Root.AddChild(column);
         column.AddChild(_art);
         _title.ClipText = true;

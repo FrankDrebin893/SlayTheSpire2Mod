@@ -1,6 +1,7 @@
 using System.Reflection;
 using System.Text;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using HarmonyLib;
 using MegaCrit.Sts2.Core.Entities.Ascension;
 using MegaCrit.Sts2.Core.Entities.Cards;
@@ -14,6 +15,7 @@ using MegaCrit.Sts2.Core.Models.Acts;
 using MegaCrit.Sts2.Core.Models.CardPools;
 using MegaCrit.Sts2.Core.Models.Cards;
 using MegaCrit.Sts2.Core.Models.Characters;
+using MegaCrit.Sts2.Core.Models.Enchantments;
 using MegaCrit.Sts2.Core.Models.Events;
 using MegaCrit.Sts2.Core.Models.RelicPools;
 using MegaCrit.Sts2.Core.Models.Relics;
@@ -80,6 +82,7 @@ public sealed class GameData
     public const int MapElite = (int)MapPointType.Elite;
 
     private static readonly RelicRarity[] BagRarities = [RelicRarity.Common, RelicRarity.Uncommon, RelicRarity.Rare, RelicRarity.Shop];
+    private static readonly Regex BbTagRegex = new(@"\[/?[^\]]+\]", RegexOptions.Compiled);
 
     public readonly IdTable<ActModel> Acts = new();
     public readonly IdTable<EncounterModel> Encounters = new();
@@ -106,14 +109,25 @@ public sealed class GameData
     public int[] FirstRewardCards { get; private set; } = [];
     // The shared bag relics of the rarities that are ever dealt.
     public int[] SharedBagDealt { get; private set; } = [];
+    // Relics of the shared bag that are skipped when one is pulled.
+    public int[] SharedBagDisallowed { get; private set; } = [];
     // Relics of the player bag that are skipped when one is pulled.
     public int[] BagDisallowed { get; private set; } = [];
+    // Relics of the player bag that are skipped in the merchant shop.
+    public int[] ShopDisallowed { get; private set; } = [];
+    // Relics that can appear in Treasure Chests.
+    public int[] TreasureRelicOptions { get; private set; } = [];
+    // Relics that can appear in the First Shop.
+    public int[] ShopRelicOptions { get; private set; } = [];
+    // Cards (character + colorless) that can appear in the First Shop.
+    public int[] ShopCardOptions { get; private set; } = [];
     // Pairs of Neow relics that are never offered together.
     public int[][] NeowNeverTogether { get; private set; } = [];
     public int[] PotionOptions { get; private set; } = [];
     public int[] ColorlessCards { get; private set; } = [];
     public int[] OtherCharacterCards { get; private set; } = [];
     private readonly Dictionary<int, string> _cardOwners = new();
+    private readonly Dictionary<(int Ancient, int Slot), int[]> _ancientRelicsBySlot = new();
     public int[] Curses { get; private set; } = [];
     public int[] BonesRelics { get; private set; } = [];
     // The cursed offers, for marking them in the pickers.
@@ -149,6 +163,94 @@ public sealed class GameData
     // The character a card of another character belongs to; null for every other card.
     public string? CardOwner(int id) => _cardOwners.GetValueOrDefault(id);
     public string PotionName(int id) => id < 0 ? "none" : Potions[id].Title.GetFormattedText();
+
+    public string RelicTooltip(int id)
+    {
+        if (id < 0 || id >= Relics.Count)
+            return "";
+        try
+        {
+            RelicModel r = Relics[id];
+            string desc = StripBbCode(r.DynamicDescription.GetFormattedText());
+            return $"{r.Title.GetFormattedText()} ({r.Rarity})\n{desc}".Trim();
+        }
+        catch
+        {
+            return RelicName(id);
+        }
+    }
+
+    public string CardTooltip(int id)
+    {
+        if (id < 0 || id >= Cards.Count)
+            return "";
+        try
+        {
+            CardModel c = Cards[id];
+            string desc = StripBbCode(c.GetDescriptionForPile(PileType.None));
+            string owner = _cardOwners.TryGetValue(id, out string? o) ? $" · {o}" : "";
+            return $"{c.Title} ({c.Rarity} {c.Type}{owner})\n{desc}".Trim();
+        }
+        catch
+        {
+            return CardName(id);
+        }
+    }
+
+    public string PotionTooltip(int id)
+    {
+        if (id < 0 || id >= Potions.Count)
+            return "";
+        try
+        {
+            PotionModel p = Potions[id];
+            string desc = StripBbCode(p.DynamicDescription.GetFormattedText());
+            return $"{p.Title.GetFormattedText()} ({p.Rarity})\n{desc}".Trim();
+        }
+        catch
+        {
+            return PotionName(id);
+        }
+    }
+
+    public string ItemTooltip(GiveItem what, int id) => what switch
+    {
+        GiveItem.Card => CardTooltip(id),
+        GiveItem.Relic => RelicTooltip(id),
+        _ => PotionTooltip(id)
+    };
+
+    private static string StripBbCode(string text) =>
+        BbTagRegex.Replace(text.Replace("[img]res://images/packed/sprite_fonts/star_icon.png[/img]", "★"), "").Trim();
+
+    // All relics that any Ancient in act `slot` (or a specific `ancientId`) can offer.
+    public int[] AncientRelicOptions(int slot, int? ancientId = null)
+    {
+        if (slot == 0)
+            return NeowRelics;
+        IEnumerable<int> ancients = ancientId.HasValue
+            ? [ancientId.Value]
+            : SlotActs[slot].SelectMany(a => ActInfos[a].Ancients).Concat(SharedAncients).Distinct();
+        return ancients
+            .SelectMany(a => _ancientRelicsBySlot.GetValueOrDefault((a, slot), []))
+            .Distinct()
+            .ToArray();
+    }
+
+    // Which Ancient offers a given relic in Act 2/3, for labelling in pickers.
+    public string? AncientOwnerOfRelic(int slot, int relicId)
+    {
+        if (slot == 0)
+            return NeowId >= 0 ? AncientName(NeowId) : null;
+        IEnumerable<int> ancients = SlotActs[slot].SelectMany(a => ActInfos[a].Ancients).Concat(SharedAncients).Distinct();
+        foreach (int anc in ancients)
+        {
+            if (_ancientRelicsBySlot.TryGetValue((anc, slot), out int[]? pool) && pool.Contains(relicId))
+                return AncientName(anc);
+        }
+
+        return null;
+    }
 
     private void Export()
     {
@@ -234,10 +336,210 @@ public sealed class GameData
             DoubleBoss = SeedSimulator.AscensionOverride!.HasLevel(AscensionLevel.DoubleBoss);
             w.WriteBoolean("double_boss", DoubleBoss);
 
+            WriteAncientDefs(w, run);
+
+            SharedBagDisallowed = shared.Where(r => !r.IsAllowed(run.State)).Select(r => Relics.Id(r)).ToArray();
+            w.WriteInts("shared_bag_disallowed", SharedBagDisallowed);
+            TreasureRelicOptions = SharedBagDealt
+                .Where(r => Relics[r].Rarity is RelicRarity.Common or RelicRarity.Uncommon or RelicRarity.Rare && !SharedBagDisallowed.Contains(r))
+                .ToArray();
+
+            ShopDisallowed = mine.Where(r => !r.IsAllowed(run.State) || !r.IsAllowedInShops).Select(r => Relics.Id(r)).ToArray();
+            w.WriteInts("shop_disallowed", ShopDisallowed);
+            ShopRelicOptions = PlayerBag.Where(r => !ShopDisallowed.Contains(r)).ToArray();
+
+            CardMultiplayerConstraint constraint = player.RunState.CardMultiplayerConstraint;
+            List<CardModel> shopCards = Character.CardPool.GetUnlockedCards(unlocks, constraint)
+                .Where(c => c.Rarity != CardRarity.Basic && c.IsAllowedInRun(run.State))
+                .ToList();
+            int[] shopCharIds = WriteCards(w, "shop_cards", shopCards);
+
+            List<CardModel> shopColorless = ModelDb.CardPool<ColorlessCardPool>().GetUnlockedCards(unlocks, constraint)
+                .Where(c => c.Rarity != CardRarity.Basic && c.IsAllowedInRun(run.State))
+                .ToList();
+            int[] shopColorlessIds = WriteCards(w, "shop_colorless", shopColorless);
+
+            ShopCardOptions = shopCharIds
+                .Concat(shopColorlessIds.Where(id => Cards[id].Rarity is CardRarity.Uncommon or CardRarity.Rare))
+                .Distinct()
+                .ToArray();
+
+            w.WriteNumber("shop_rare_odds", CardRarityOdds.ShopRareOdds);
+            w.WriteNumber("shop_uncommon_odds", CardRarityOdds.shopUncommonOdds);
+
             w.WriteEndObject();
         }
 
         SnapshotJson = Encoding.UTF8.GetString(stream.ToArray());
+    }
+
+    private void WriteAncientDefs(Utf8JsonWriter w, SeedSimulator.Run run)
+    {
+        Player player = run.Player;
+        int[] allAncients = Enumerable.Range(0, Ancients.Count).ToArray();
+        int RelicId<T>() where T : RelicModel => Relics.Id(ModelDb.Relic<T>());
+
+        IEnumerable<EventOption> PropPool(AncientEventModel ev, string prop) =>
+            (IEnumerable<EventOption>)(AccessTools.PropertyGetter(ev.GetType(), prop) ?? throw new MissingMemberException(ev.GetType().Name, prop)).Invoke(ev, null)!;
+        EventOption PropOption(AncientEventModel ev, string prop) =>
+            (EventOption)(AccessTools.PropertyGetter(ev.GetType(), prop) ?? throw new MissingMemberException(ev.GetType().Name, prop)).Invoke(ev, null)!;
+        int[] AllowedIds(IEnumerable<EventOption> opts) =>
+            opts.Where(o => o.Relic != null && o.Relic.IsAllowed(run.State)).Select(o => Relics.Id(o.Relic!)).ToArray();
+
+        w.WriteStartArray("ancient_defs");
+        foreach (int ancId in allAncients)
+        {
+            AncientEventModel canonical = Ancients[ancId];
+            AncientEventModel ev = (AncientEventModel)canonical.ToMutable();
+            SeedSimulator.OwnerSetter.Invoke(ev, [player]);
+
+            w.WriteStartObject();
+            w.WriteNumber("id", ancId);
+            w.WriteString("entry", canonical.Id.Entry);
+
+            switch (ev)
+            {
+                case Neow:
+                    w.WriteString("kind", "neow");
+                    break;
+                case Orobas:
+                {
+                    int otherCharCount = run.Unlocks.Characters.Count(c => c.Id != Character.Id);
+                    int gem = RelicId<PrismaticGem>();
+                    int glass = RelicId<SeaGlass>();
+                    int[] p1 = AllowedIds(PropPool(ev, "OptionPool1"));
+                    int[] p2 = AllowedIds(PropPool(ev, "OptionPool2"));
+                    int[] p3 = AllowedIds(PropPool(ev, "OptionPool3"));
+                    w.WriteString("kind", "orobas");
+                    w.WriteNumber("other_char_count", otherCharCount);
+                    w.WriteNumber("prismatic_gem", gem);
+                    w.WriteNumber("sea_glass", glass);
+                    w.WriteInts("pool1", p1);
+                    w.WriteInts("pool2", p2);
+                    w.WriteInts("pool3", p3);
+                    int[] all = [.. p1, gem, glass, .. p2, .. p3];
+                    _ancientRelicsBySlot[(ancId, 1)] = all.Distinct().ToArray();
+                    _ancientRelicsBySlot[(ancId, 2)] = all.Distinct().ToArray();
+                    break;
+                }
+                case Pael:
+                {
+                    int[] p1 = AllowedIds(PropPool(ev, "OptionPool1"));
+                    List<EventOption> pool2 = PropPool(ev, "OptionPool2").ToList();
+                    IReadOnlyList<CardModel> deck = player.Deck.Cards;
+                    if (deck.Count(c => ModelDb.Enchantment<Goopy>().CanEnchant(c)) >= 3)
+                        pool2.Add(PropOption(ev, "PaelsClawOption"));
+                    if (deck.Count(c => c.IsRemovable) >= 5)
+                        pool2.Add(PropOption(ev, "PaelsToothOption"));
+                    pool2.AddRange(pool2.ToList());
+                    pool2.Add(PropOption(ev, "PaelsGrowthOption"));
+                    int[] p2 = AllowedIds(pool2);
+
+                    List<EventOption> pool3 = PropPool(ev, "OptionPool3").ToList();
+                    if (!player.HasEventPet())
+                        pool3.Add(PropOption(ev, "PaelsLegionOption"));
+                    int[] p3 = AllowedIds(pool3);
+
+                    w.WriteString("kind", "three_pools");
+                    w.WriteInts("pool1", p1);
+                    w.WriteInts("pool2", p2);
+                    w.WriteInts("pool3", p3);
+                    int[] all = [.. p1, .. p2, .. p3];
+                    _ancientRelicsBySlot[(ancId, 1)] = all.Distinct().ToArray();
+                    _ancientRelicsBySlot[(ancId, 2)] = all.Distinct().ToArray();
+                    break;
+                }
+                case Tezcatara:
+                {
+                    List<EventOption> pool1 = PropPool(ev, "OptionPool1").ToList();
+                    if (player.Deck.Cards.Any(c => c.Tags.Contains(CardTag.Strike) && c.Rarity == CardRarity.Basic))
+                        pool1.Add(PropOption(ev, "NutritiousSoupOption"));
+                    int[] p1 = AllowedIds(pool1);
+                    int[] p2 = AllowedIds(PropPool(ev, "OptionPool2"));
+                    int[] p3 = AllowedIds(PropPool(ev, "OptionPool3"));
+
+                    w.WriteString("kind", "three_pools");
+                    w.WriteInts("pool1", p1);
+                    w.WriteInts("pool2", p2);
+                    w.WriteInts("pool3", p3);
+                    int[] all = [.. p1, .. p2, .. p3];
+                    _ancientRelicsBySlot[(ancId, 1)] = all.Distinct().ToArray();
+                    _ancientRelicsBySlot[(ancId, 2)] = all.Distinct().ToArray();
+                    break;
+                }
+                case Vakuu:
+                {
+                    int[] p1 = AllowedIds(PropPool(ev, "Pool1"));
+                    int[] p2 = AllowedIds(PropPool(ev, "Pool2"));
+                    int[] p3 = AllowedIds(PropPool(ev, "Pool3"));
+
+                    w.WriteString("kind", "three_pools");
+                    w.WriteInts("pool1", p1);
+                    w.WriteInts("pool2", p2);
+                    w.WriteInts("pool3", p3);
+                    int[] all = [.. p1, .. p2, .. p3];
+                    _ancientRelicsBySlot[(ancId, 1)] = all.Distinct().ToArray();
+                    _ancientRelicsBySlot[(ancId, 2)] = all.Distinct().ToArray();
+                    break;
+                }
+                case Nonupeipe:
+                {
+                    List<EventOption> pool1 = PropPool(ev, "OptionPool").ToList();
+                    if (player.Deck.Cards.Count(ModelDb.Enchantment<Swift>().CanEnchant) >= 4)
+                        pool1.Add(PropOption(ev, "BeautifulBraceletEventOption"));
+                    int[] p1 = AllowedIds(pool1);
+
+                    w.WriteString("kind", "shuffle_three");
+                    w.WriteInts("pool1", p1);
+                    _ancientRelicsBySlot[(ancId, 1)] = p1.Distinct().ToArray();
+                    _ancientRelicsBySlot[(ancId, 2)] = p1.Distinct().ToArray();
+                    break;
+                }
+                case Tanx:
+                {
+                    List<EventOption> pool1 = PropPool(ev, "BaseOptionPool").ToList();
+                    if (player.Deck.Cards.Count(c => ModelDb.Enchantment<Instinct>().CanEnchant(c)) >= 3)
+                        pool1.Add(PropOption(ev, "TriBoomerangOption"));
+                    int[] p1 = AllowedIds(pool1);
+
+                    w.WriteString("kind", "shuffle_three");
+                    w.WriteInts("pool1", p1);
+                    _ancientRelicsBySlot[(ancId, 1)] = p1.Distinct().ToArray();
+                    _ancientRelicsBySlot[(ancId, 2)] = p1.Distinct().ToArray();
+                    break;
+                }
+                case Darv:
+                {
+                    int[] act2 =
+                    [
+                        RelicId<Astrolabe>(), RelicId<BlackStar>(), RelicId<CallingBell>(), RelicId<EmptyCage>(),
+                        RelicId<PandorasBox>(), RelicId<RunicPyramid>(), RelicId<SneckoEye>(),
+                        RelicId<Ectoplasm>(), RelicId<Sozu>(), RelicId<PhilosophersStone>(), RelicId<VelvetChoker>()
+                    ];
+                    int[] act3 =
+                    [
+                        RelicId<Astrolabe>(), RelicId<BlackStar>(), RelicId<CallingBell>(), RelicId<EmptyCage>(),
+                        RelicId<PandorasBox>(), RelicId<RunicPyramid>(), RelicId<SneckoEye>(),
+                        RelicId<PhilosophersStone>(), RelicId<VelvetChoker>()
+                    ];
+                    int tome = RelicId<DustyTome>();
+                    w.WriteString("kind", "darv");
+                    w.WriteInts("pool1", act2);
+                    w.WriteInts("pool2", act3);
+                    w.WriteNumber("dusty_tome", tome);
+                    _ancientRelicsBySlot[(ancId, 1)] = [.. act2, tome];
+                    _ancientRelicsBySlot[(ancId, 2)] = [.. act3, tome];
+                    break;
+                }
+                default:
+                    w.WriteString("kind", "other");
+                    break;
+            }
+
+            w.WriteEndObject();
+        }
+
+        w.WriteEndArray();
     }
 
     private ActInfo WriteAct(Utf8JsonWriter w, ActModel act, UnlockState unlocks)
@@ -441,6 +743,7 @@ public sealed class GameData
             w.WriteStartObject();
             w.WriteNumber("id", Cards.Id(c));
             w.WriteNumber("rarity", (int)c.Rarity);
+            w.WriteNumber("card_type", (int)c.Type);
             w.WriteEndObject();
         }
     }
@@ -487,6 +790,7 @@ public sealed class GameData
         ];
         NeowRelics = curse.Concat(positive).Concat(extras).Where(r => !disallowed.Contains(r)).Distinct().ToArray();
         NeowCurses = curse;
+        _ancientRelicsBySlot[(NeowId, 0)] = NeowRelics;
 
         w.WriteStartObject("neow");
         w.WriteString("entry", canonical.Id.Entry);

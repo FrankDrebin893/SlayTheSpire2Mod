@@ -1,23 +1,20 @@
 using System.Reflection;
 using Godot;
 using HarmonyLib;
-using MegaCrit.Sts2.Core.Models;
 using MegaCrit.Sts2.Core.Models.Characters;
 using MegaCrit.Sts2.Core.Multiplayer;
 using MegaCrit.Sts2.Core.Multiplayer.Game.Lobby;
 using MegaCrit.Sts2.Core.Nodes.GodotExtensions;
+using MegaCrit.Sts2.Core.Nodes.Screens.CharacterSelect;
 using MegaCrit.Sts2.Core.Nodes.Screens.CustomRun;
 using Timer = Godot.Timer;
 
 namespace RasmusSlayTheSpire2Mod.SeedSearch;
 
-// The full-screen seed search opened from the Custom Run screen. Built from stock Godot nodes
-// only: node subclasses defined in a mod assembly are not registered with the engine (so it
-// cannot be an NSubmenu), and this class is a plain object that lives as long as the signal
-// handlers on its nodes do. It covers the Custom Run screen and is freed when closed.
-// It has two views that each get the whole width, the filters (FilterPanel) and the results with
-// the seed preview (PreviewPanel), beside a sidebar that stays: what the mouse is over, and the
-// active filters. Visuals holds the look and the game art all of them use.
+// The full-screen seed search opened from the Standard Run (Character Select) or Custom Run screen.
+// Built from stock Godot nodes only: node subclasses defined in a mod assembly are not registered
+// with the engine (so it cannot be an NSubmenu), and this class is a plain object that lives as
+// long as the signal handlers on its nodes do.
 public sealed class SeedSearchScreen
 {
     private const int MaxResults = 100;
@@ -25,26 +22,29 @@ public sealed class SeedSearchScreen
     private const int FiltersView = 0, ResultsView = 1;
 
     private static readonly FieldInfo SeedInputField = AccessTools.Field(typeof(NCustomRunScreen), "_seedInput");
-    private static readonly string[] GameButtonFields = ["_backButton", "_confirmButton", "_randomizeButton"];
+    private static readonly string[] CustomButtonFields = ["_backButton", "_confirmButton", "_randomizeButton"];
+    private static readonly string[] StandardButtonFields = ["_backButton", "_unreadyButton", "_embarkButton"];
 
     // Filters survive closing the screen for as long as they refer to the same game data.
     private static readonly List<Cond> Conds = [];
     private static GameData? _condsData;
 
-    private readonly NCustomRunScreen _screen;
-    private readonly LineEdit _gameSeedInput;
+    private readonly Control _hostScreen;
+    private readonly StartRunLobby _lobby;
+    private readonly string _initialSeed;
+    private readonly Action<string> _applySeed;
+    private readonly string[] _buttonFields;
+    private readonly bool _isStandardRun;
     private readonly SeedEngine _engine;
     private readonly List<NClickableControl> _disabledGameButtons = [];
 
-    // Its own canvas layer, so it sits above everything on the Custom Run screen whatever the
-    // order and z-index of that screen's nodes.
     private readonly CanvasLayer _layer = new() { Layer = 20 };
     private readonly Control _root = new();
     private readonly InfoPanel _info = new();
     private readonly PreviewPanel _preview;
     private readonly Button _searchButton = new();
-    private readonly Label _status = Visuals.MutedLabel("Pick filters, then search.");
-    private readonly Choice _viewChoice = new([(FiltersView, "Filters"), (ResultsView, "Results")]);
+    private readonly Label _status = Visuals.MutedLabel("Click any item to add a filter in 1 click, then press Search.");
+    private readonly Choice _viewChoice = new([(FiltersView, "Filters"), (ResultsView, "Results & Preview")]);
     private readonly Choice _listChoice = new([(ResultsList, "Results"), (BookmarksList, "Bookmarks")]);
     private readonly ItemList _results = new();
     private readonly ScrollContainer _bookmarkScroll = new() { HorizontalScrollMode = ScrollContainer.ScrollMode.Disabled };
@@ -62,28 +62,80 @@ public sealed class SeedSearchScreen
 
     private GameData Data => _engine.Data;
 
-    private SeedSearchScreen(NCustomRunScreen screen, SeedEngine engine)
+    private SeedSearchScreen(
+        Control hostScreen,
+        StartRunLobby lobby,
+        string initialSeed,
+        Action<string> applySeed,
+        string[] buttonFields,
+        bool isStandardRun,
+        SeedEngine engine)
     {
-        _screen = screen;
+        _hostScreen = hostScreen;
+        _lobby = lobby;
+        _initialSeed = initialSeed;
+        _applySeed = applySeed;
+        _buttonFields = buttonFields;
+        _isStandardRun = isStandardRun;
         _engine = engine;
-        _gameSeedInput = (LineEdit)SeedInputField.GetValue(screen)!;
-        _preview = new PreviewPanel(engine.Data, _info.Show);
+        _preview = new PreviewPanel(engine.Data, Conds, _info.Show);
     }
 
-    public static bool CanOpen(NCustomRunScreen screen) =>
-        screen.Lobby is { NetService: NetSingleplayerGameService } lobby && lobby.LocalPlayer.character is not (null or RandomCharacter);
+    public static bool CanOpen(StartRunLobby? lobby) =>
+        lobby is { NetService: NetSingleplayerGameService } && lobby.LocalPlayer.character is not (null or RandomCharacter);
+
+    public static bool CanOpen(NCustomRunScreen screen) => CanOpen(screen.Lobby);
+
+    public static bool CanOpen(NCharacterSelectScreen screen) => CanOpen(screen.Lobby);
 
     public static void Open(NCustomRunScreen screen)
     {
         StartRunLobby lobby = screen.Lobby;
-        SeedEngine engine = SeedEngine.For(lobby.LocalPlayer.character, lobby.Ascension, lobby.Act1);
+        LineEdit seedInput = (LineEdit)SeedInputField.GetValue(screen)!;
+        SeedEngine engine = PrepareEngine(lobby);
+        new SeedSearchScreen(
+            screen,
+            lobby,
+            seedInput.Text,
+            seed =>
+            {
+                seedInput.Text = seed;
+                lobby.SetSeed(seed);
+            },
+            CustomButtonFields,
+            isStandardRun: false,
+            engine).Build();
+    }
+
+    public static void Open(NCharacterSelectScreen screen, Action<string>? onSeedChanged = null)
+    {
+        StartRunLobby lobby = screen.Lobby;
+        SeedEngine engine = PrepareEngine(lobby);
+        new SeedSearchScreen(
+            screen,
+            lobby,
+            lobby.Seed ?? "",
+            seed =>
+            {
+                lobby.SetSeed(seed);
+                onSeedChanged?.Invoke(seed);
+            },
+            StandardButtonFields,
+            isStandardRun: true,
+            engine).Build();
+    }
+
+    private static SeedEngine PrepareEngine(StartRunLobby lobby)
+    {
+        string act1 = string.IsNullOrEmpty(lobby.Act1) ? "random" : lobby.Act1;
+        SeedEngine engine = SeedEngine.For(lobby.LocalPlayer.character, lobby.Ascension, act1);
         if (!ReferenceEquals(_condsData, engine.Data))
         {
             Conds.Clear();
             _condsData = engine.Data;
         }
 
-        new SeedSearchScreen(screen, engine).Build();
+        return engine;
     }
 
     // ---- layout ----
@@ -93,7 +145,9 @@ public sealed class SeedSearchScreen
         _root.Name = "SeedSearchScreen";
         _root.SetAnchorsAndOffsetsPreset(Control.LayoutPreset.FullRect);
         _root.MouseFilter = Control.MouseFilterEnum.Stop;
-        _root.Theme = Visuals.MakeTheme(_screen.GetNodeOrNull<Control>("%SeedLabel")?.GetThemeFont("font"));
+        Font? font = _hostScreen.GetNodeOrNull<Control>("%SeedLabel")?.GetThemeFont("font")
+            ?? _hostScreen.GetNodeOrNull<Control>("InfoPanel/VBoxContainer/Name")?.GetThemeFont("font");
+        _root.Theme = Visuals.MakeTheme(font);
         _root.TreeExiting += StopSearch;
         SavedData.BookmarksChanged += RefreshBookmarks;
         _root.TreeExiting += () => SavedData.BookmarksChanged -= RefreshBookmarks;
@@ -105,28 +159,33 @@ public sealed class SeedSearchScreen
         MarginContainer margin = new();
         margin.SetAnchorsAndOffsetsPreset(Control.LayoutPreset.FullRect);
         foreach (string side in new[] { "margin_left", "margin_right" })
-            margin.AddThemeConstantOverride(side, 40);
+            margin.AddThemeConstantOverride(side, 32);
         foreach (string side in new[] { "margin_top", "margin_bottom" })
-            margin.AddThemeConstantOverride(side, 30);
+            margin.AddThemeConstantOverride(side, 24);
         _root.AddChild(margin);
 
         VBoxContainer page = new();
-        page.AddThemeConstantOverride("separation", 16);
+        page.AddThemeConstantOverride("separation", 14);
         margin.AddChild(page);
         page.AddChild(BuildHeader());
 
         HBoxContainer body = new() { SizeFlagsVertical = Control.SizeFlags.ExpandFill };
-        body.AddThemeConstantOverride("separation", 20);
+        body.AddThemeConstantOverride("separation", 16);
         page.AddChild(body);
 
         FilterPanel filters = new(Data, Conds, _info.Show, text => _status.Text = text);
         filters.Root.SizeFlagsHorizontal = Control.SizeFlags.ExpandFill;
+        filters.Changed += () =>
+        {
+            if (_shown != null)
+                _preview.Show(_shown, "");
+        };
         body.AddChild(filters.Root);
         Control results = BuildResultsPanel();
         body.AddChild(results);
 
-        VBoxContainer sidebar = new() { CustomMinimumSize = new Vector2(340, 0) };
-        sidebar.AddThemeConstantOverride("separation", 12);
+        VBoxContainer sidebar = new() { CustomMinimumSize = new Vector2(390, 0) };
+        sidebar.AddThemeConstantOverride("separation", 10);
         body.AddChild(sidebar);
         sidebar.AddChild(_info.Root);
         filters.Active.SizeFlagsVertical = Control.SizeFlags.ExpandFill;
@@ -139,8 +198,7 @@ public sealed class SeedSearchScreen
         }
 
         _viewChoice.Changed += ShowView;
-        // Opened on a seed with nothing to filter on: that seed is what there is to look at.
-        if (Conds.Count == 0 && _gameSeedInput.Text.Trim().Length > 0)
+        if (Conds.Count == 0 && _initialSeed.Trim().Length > 0)
             _viewChoice.Select(ResultsView);
         ShowView();
 
@@ -149,36 +207,37 @@ public sealed class SeedSearchScreen
         _root.AddChild(_pollTimer);
 
         _layer.AddChild(_root);
-        _screen.AddChild(_layer);
+        _hostScreen.AddChild(_layer);
         DisableGameButtons();
         RefreshBookmarks();
-        ShowSeed(_gameSeedInput.Text);
+        ShowSeed(_initialSeed);
     }
 
     private Control BuildHeader()
     {
         HBoxContainer header = new();
-        header.AddThemeConstantOverride("separation", 24);
+        header.AddThemeConstantOverride("separation", 20);
 
-        header.AddChild(Visuals.SectionTitle("Seed search", 38));
+        header.AddChild(Visuals.SectionTitle("Seed Search", 36));
         if (Visuals.CharacterIcon(Data.Character) is { } portrait)
         {
             header.AddChild(new TextureRect
             {
                 Texture = portrait,
-                CustomMinimumSize = new Vector2(52, 52),
+                CustomMinimumSize = new Vector2(48, 48),
                 ExpandMode = TextureRect.ExpandModeEnum.IgnoreSize,
                 StretchMode = TextureRect.StretchModeEnum.KeepAspectCentered,
                 SizeFlagsVertical = Control.SizeFlags.ShrinkCenter
             });
         }
 
+        string modeLabel = _isStandardRun ? "Standard Run" : "Custom Run";
         string act1 = Data.SlotActs[0].Length == 1 ? Data.ActName(Data.SlotActs[0][0]) : "random";
         VBoxContainer context = new() { SizeFlagsHorizontal = Control.SizeFlags.ExpandFill, SizeFlagsVertical = Control.SizeFlags.ShrinkCenter };
         context.AddChild(new Label
         {
-            Text = $"{Data.Character.Title.GetFormattedText()}  ·  Ascension {Data.Ascension}  ·  Act 1: {act1}  ·  {_engine.Status}",
-            TooltipText = "Character, ascension and act 1 come from the Custom Run screen.",
+            Text = $"{Data.Character.Title.GetFormattedText()}  ·  Ascension {Data.Ascension}  ·  Act 1: {act1}  ·  {modeLabel}  ·  {_engine.Status}",
+            TooltipText = "Character, ascension and Act 1 come from your current lobby.",
             MouseFilter = Control.MouseFilterEnum.Stop,
             ClipText = true
         });
@@ -189,14 +248,14 @@ public sealed class SeedSearchScreen
 
         _viewChoice.Root.SizeFlagsVertical = Control.SizeFlags.ShrinkCenter;
         foreach (Node view in _viewChoice.Root.GetChildren())
-            ((Button)view).CustomMinimumSize = new Vector2(130, 48);
+            ((Button)view).CustomMinimumSize = new Vector2(145, 46);
         header.AddChild(_viewChoice.Root);
         _searchButton.Text = "Search";
-        _searchButton.CustomMinimumSize = new Vector2(160, 48);
+        _searchButton.CustomMinimumSize = new Vector2(150, 46);
         _searchButton.SizeFlagsVertical = Control.SizeFlags.ShrinkCenter;
         _searchButton.Pressed += ToggleSearch;
         header.AddChild(_searchButton);
-        Button back = new() { Text = "Back", CustomMinimumSize = new Vector2(140, 48), SizeFlagsVertical = Control.SizeFlags.ShrinkCenter };
+        Button back = new() { Text = "Back (Esc)", CustomMinimumSize = new Vector2(135, 46), SizeFlagsVertical = Control.SizeFlags.ShrinkCenter };
         back.Shortcut = new Shortcut { Events = new Godot.Collections.Array { new InputEventKey { Keycode = Key.Escape }, new InputEventAction { Action = "ui_cancel" } } };
         back.Pressed += Close;
         header.AddChild(back);
@@ -216,7 +275,7 @@ public sealed class SeedSearchScreen
         split.AddThemeConstantOverride("separation", 14);
         column.AddChild(split);
 
-        VBoxContainer left = new() { CustomMinimumSize = new Vector2(240, 0) };
+        VBoxContainer left = new() { CustomMinimumSize = new Vector2(220, 0) };
         split.AddChild(left);
         left.AddChild(_listChoice.Root);
         _listChoice.Changed += () =>
@@ -238,17 +297,17 @@ public sealed class SeedSearchScreen
         split.AddChild(right);
 
         HBoxContainer seedRow = new();
-        seedRow.AddThemeConstantOverride("separation", 10);
+        seedRow.AddThemeConstantOverride("separation", 8);
         right.AddChild(seedRow);
-        seedRow.AddChild(new Label { Text = "Preview seed" });
+        seedRow.AddChild(new Label { Text = "Seed:" });
         _seedBox.PlaceholderText = "type or pick a seed";
-        _seedBox.CustomMinimumSize = new Vector2(240, 0);
+        _seedBox.CustomMinimumSize = new Vector2(210, 0);
         _seedBox.TextChanged += text => ShowSeed(text, fromBox: true);
         seedRow.AddChild(_seedBox);
-        _useButton.Text = "Use this seed";
+        _useButton.Text = _isStandardRun ? "Use in Standard Run" : "Use this seed";
         _useButton.Pressed += UseSeed;
         seedRow.AddChild(_useButton);
-        _bookmarkButton.CustomMinimumSize = new Vector2(200, 0);
+        _bookmarkButton.CustomMinimumSize = new Vector2(160, 0);
         _bookmarkButton.Pressed += () =>
         {
             if (_shown != null)
@@ -260,12 +319,22 @@ public sealed class SeedSearchScreen
         copy.Pressed += () =>
         {
             if (_shown != null)
+            {
                 DisplayServer.ClipboardSet(_shown.Seed);
+                _status.Text = $"Copied seed {_shown.Seed} to clipboard.";
+            }
         };
         seedRow.AddChild(copy);
-        Button site = new() { Text = "Open on SearchTheSpire" };
-        site.Pressed += OpenOnSearchTheSpire;
-        seedRow.AddChild(site);
+        Button copySummary = new() { Text = "Copy summary", TooltipText = "Copy a formatted summary of this seed (Neow, First Shop, Chests, Ancients, Bosses) to clipboard" };
+        copySummary.Pressed += () =>
+        {
+            if (_shown != null)
+            {
+                DisplayServer.ClipboardSet(_preview.BuildSummaryText(_shown));
+                _status.Text = "Copied full seed summary to clipboard.";
+            }
+        };
+        seedRow.AddChild(copySummary);
 
         // Only there while the previewed seed is bookmarked.
         _noteRow.AddThemeConstantOverride("separation", 10);
@@ -387,7 +456,6 @@ public sealed class SeedSearchScreen
 
     private Bookmark? ShownBookmark() => _shown == null ? null : SavedData.FindBookmark(_shown.Seed, Data);
 
-    // Rows of buttons rather than an ItemList, which cannot show a second line under the seed.
     private void RefreshBookmarks()
     {
         Visuals.Clear(_bookmarks);
@@ -395,14 +463,13 @@ public sealed class SeedSearchScreen
         if (SavedData.Bookmarks.Count == 0)
         {
             Label empty = Visuals.MutedLabel("No bookmarks yet. Preview a seed and press Bookmark.");
-            empty.CustomMinimumSize = new Vector2(220, 0);
+            empty.CustomMinimumSize = new Vector2(200, 0);
             _bookmarks.AddChild(empty);
         }
 
         StyleBoxFlat plain = Visuals.Box(Visuals.InsetColor, Visuals.Plain, 8);
         foreach (Bookmark b in SavedData.Bookmarks)
         {
-            // A bookmark made under another character or ascension still previews, as this setup.
             string detail = string.Join("  ·  ", new[] { b.IsFor(Data) ? "" : b.Setup, b.Note }.Where(part => part.Length > 0));
             Button row = new()
             {
@@ -427,11 +494,10 @@ public sealed class SeedSearchScreen
     {
         Bookmark? bookmark = ShownBookmark();
         _bookmarkButton.Disabled = _shown == null;
-        _bookmarkButton.Text = bookmark == null ? "Bookmark" : "Remove bookmark";
+        _bookmarkButton.Text = bookmark == null ? "Bookmark" : "Unbookmark";
         _noteRow.Visible = bookmark != null;
         foreach ((Button row, string seed) in _bookmarkRows)
             row.SetPressedNoSignal(seed == _shown?.Seed);
-        // Typing a note saves it, which leads back here; the box already has that text.
         if (bookmark != null && _noteBox.Text.Trim() != bookmark.Note)
             _noteBox.Text = bookmark.Note;
     }
@@ -443,18 +509,8 @@ public sealed class SeedSearchScreen
         if (_shown == null)
             return;
 
-        // Setting Text from code does not emit TextChanged, so tell the lobby directly.
-        _gameSeedInput.Text = _shown.Seed;
-        _screen.Lobby.SetSeed(_shown.Seed);
+        _applySeed(_shown.Seed);
         Close();
-    }
-
-    private void OpenOnSearchTheSpire()
-    {
-        string url = "https://searchthespire.app/";
-        if (_shown != null)
-            url += $"?seed={Uri.EscapeDataString(_shown.Seed)}&ichar={Data.Character.Id.Entry.ToLowerInvariant()}";
-        OS.ShellOpen(url);
     }
 
     private void Close()
@@ -466,13 +522,12 @@ public sealed class SeedSearchScreen
         _layer.QueueFree();
     }
 
-    // The game's own buttons keep their hotkeys while covered, so Esc would leave the Custom Run
-    // screen and Enter would embark from underneath this one.
     private void DisableGameButtons()
     {
-        foreach (string field in GameButtonFields)
+        Type hostType = _hostScreen.GetType();
+        foreach (string field in _buttonFields)
         {
-            if (AccessTools.Field(typeof(NCustomRunScreen), field)?.GetValue(_screen) is NClickableControl { IsEnabled: true } button)
+            if (AccessTools.Field(hostType, field)?.GetValue(_hostScreen) is NClickableControl { IsEnabled: true } button)
             {
                 button.Disable();
                 _disabledGameButtons.Add(button);

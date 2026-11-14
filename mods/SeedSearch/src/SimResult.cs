@@ -16,8 +16,72 @@ public sealed class MapResult
     public int[][] Points = [];
     // [col, row, col, row] between grid points, sorted.
     public int[][] Edges = [];
+    public int MaxPathElites;
+    public int MaxPathRests;
+    public int MaxPathShops;
+    public int MaxPathUnknowns;
 
     public int Count(int pointType) => Points.Count(p => p[2] == pointType);
+
+    public int MaxOnPath(int pointType) => pointType switch
+    {
+        GameData.MapElite => MaxPathElites,
+        GameData.MapRest => MaxPathRests,
+        GameData.MapShop => MaxPathShops,
+        GameData.MapUnknown => MaxPathUnknowns,
+        _ => 0
+    };
+
+    public void ComputeMaxPaths()
+    {
+        MaxPathElites = CalcMaxPath(GameData.MapElite);
+        MaxPathRests = CalcMaxPath(GameData.MapRest);
+        MaxPathShops = CalcMaxPath(GameData.MapShop);
+        MaxPathUnknowns = CalcMaxPath(GameData.MapUnknown);
+    }
+
+    private int CalcMaxPath(int targetType)
+    {
+        if (Points.Length == 0)
+            return 0;
+        int[] order = Enumerable.Range(0, Points.Length)
+            .OrderBy(i => Points[i][1])
+            .ThenBy(i => Points[i][0])
+            .ToArray();
+        int[] dp = new int[Points.Length];
+        int best = 0;
+        foreach (int i in order)
+        {
+            int c = Points[i][0];
+            int r = Points[i][1];
+            int selfVal = Points[i][2] == targetType ? 1 : 0;
+            int bestPred = 0;
+            foreach (int[] edge in Edges)
+            {
+                if (edge[2] == c && edge[3] == r)
+                {
+                    int predIdx = Array.FindIndex(Points, p => p[0] == edge[0] && p[1] == edge[1]);
+                    if (predIdx >= 0 && dp[predIdx] > bestPred)
+                        bestPred = dp[predIdx];
+                }
+            }
+
+            dp[i] = bestPred + selfVal;
+            if (dp[i] > best)
+                best = dp[i];
+        }
+
+        return best;
+    }
+}
+
+public sealed class ShopResult
+{
+    public int[] Cards = [];
+    public int SaleIndex;
+    public int[] Colorless = [];
+    public int[] Relics = [];
+    public int[] Potions = [];
 }
 
 // What one Neow relic hands out when it is taken, assuming it is the first thing to draw from the
@@ -29,6 +93,10 @@ public sealed class NeowOutcome
     public int[] Potions = [];
     // One per entry of Relics for Neow's Bones, whose relics roll things of their own.
     public NestedOutcome[] Nested = [];
+    // Floor 1 combat reward after taking this Neow relic.
+    public int FirstGold;
+    public int FirstPotion = -1;
+    public int[] FirstCards = [];
 
     public bool IsEmpty => Cards.Length + Relics.Length + Potions.Length == 0;
 
@@ -39,7 +107,13 @@ public sealed class NeowOutcome
         _ => Potions
     };
 
-    public bool SameAs(NeowOutcome o) => Cards.AsSpan().SequenceEqual(o.Cards) && Relics.AsSpan().SequenceEqual(o.Relics) && Potions.AsSpan().SequenceEqual(o.Potions);
+    public bool SameAs(NeowOutcome o) =>
+        Cards.AsSpan().SequenceEqual(o.Cards)
+        && Relics.AsSpan().SequenceEqual(o.Relics)
+        && Potions.AsSpan().SequenceEqual(o.Potions);
+
+    public bool SameFirstReward(int gold, int potion, int[] cards) =>
+        FirstGold == gold && FirstPotion == potion && FirstCards.AsSpan().SequenceEqual(cards);
 }
 
 // What a relic given by Neow's Bones gives. The player takes the relics of Neow's Bones in either
@@ -60,11 +134,14 @@ public sealed class SimResult
     public int[] Bosses = [];
     public int SecondBoss = -1;
     public int[] Ancients = [];
+    public int[][] AncientRelics = [];
     public int[][] Events = [];
     public int[][] Normals = [];
     public int[][] Elites = [];
     public List<RelicDeque> SharedRelics = [];
     public List<RelicDeque> PlayerRelics = [];
+    public int[] TreasureRelics = [];
+    public ShopResult FirstShop = new();
     // Two positive options, then the cursed one.
     public int[] Neow = [];
     // One per offer in Neow; empty when not simulated.
@@ -79,6 +156,7 @@ public sealed class SimResult
     {
         using JsonDocument doc = JsonDocument.Parse(json);
         JsonElement r = doc.RootElement;
+        JsonElement shopElem = r.GetProperty("first_shop");
         return new SimResult
         {
             Seed = r.GetProperty("seed").GetString() ?? "",
@@ -86,11 +164,21 @@ public sealed class SimResult
             Bosses = Ints(r.GetProperty("bosses")),
             SecondBoss = r.GetProperty("second_boss").GetInt32(),
             Ancients = Ints(r.GetProperty("ancients")),
+            AncientRelics = r.TryGetProperty("ancient_relics", out JsonElement ar) ? IntLists(ar) : [],
             Events = IntLists(r.GetProperty("events")),
             Normals = IntLists(r.GetProperty("normals")),
             Elites = IntLists(r.GetProperty("elites")),
             SharedRelics = Deques(r.GetProperty("shared_relics")),
             PlayerRelics = Deques(r.GetProperty("player_relics")),
+            TreasureRelics = r.TryGetProperty("treasure_relics", out JsonElement tr) ? Ints(tr) : [],
+            FirstShop = new ShopResult
+            {
+                Cards = Ints(shopElem.GetProperty("cards")),
+                SaleIndex = shopElem.GetProperty("sale_index").GetInt32(),
+                Colorless = Ints(shopElem.GetProperty("colorless")),
+                Relics = Ints(shopElem.GetProperty("relics")),
+                Potions = Ints(shopElem.GetProperty("potions"))
+            },
             Neow = Ints(r.GetProperty("neow")),
             NeowOutcomes = r.GetProperty("neow_outcomes").EnumerateArray()
                 .Select(o =>
@@ -99,6 +187,12 @@ public sealed class SimResult
                     outcome.Nested = o.GetProperty("nested").EnumerateArray()
                         .Select(n => new NestedOutcome { First = Given(n.GetProperty("first")), Second = Given(n.GetProperty("second")) })
                         .ToArray();
+                    if (o.TryGetProperty("first_gold", out JsonElement fg))
+                        outcome.FirstGold = fg.GetInt32();
+                    if (o.TryGetProperty("first_potion", out JsonElement fp))
+                        outcome.FirstPotion = fp.GetInt32();
+                    if (o.TryGetProperty("first_cards", out JsonElement fc))
+                        outcome.FirstCards = Ints(fc);
                     return outcome;
                 })
                 .ToArray(),
@@ -108,7 +202,15 @@ public sealed class SimResult
             Maps = r.GetProperty("maps").EnumerateArray()
                 .Select(m => m.ValueKind == JsonValueKind.Null
                     ? null
-                    : new MapResult { Points = IntLists(m.GetProperty("points")), Edges = IntLists(m.GetProperty("edges")) })
+                    : new MapResult
+                    {
+                        Points = IntLists(m.GetProperty("points")),
+                        Edges = IntLists(m.GetProperty("edges")),
+                        MaxPathElites = m.TryGetProperty("max_path_elites", out JsonElement me) ? me.GetInt32() : 0,
+                        MaxPathRests = m.TryGetProperty("max_path_rests", out JsonElement mr) ? mr.GetInt32() : 0,
+                        MaxPathShops = m.TryGetProperty("max_path_shops", out JsonElement ms) ? ms.GetInt32() : 0,
+                        MaxPathUnknowns = m.TryGetProperty("max_path_unknowns", out JsonElement mu) ? mu.GetInt32() : 0
+                    })
                 .ToArray()
         };
     }
@@ -132,11 +234,20 @@ public sealed class SimResult
         w.WriteInts("bosses", Bosses);
         w.WriteNumber("second_boss", SecondBoss);
         w.WriteInts("ancients", Ancients);
+        w.WriteIntLists("ancient_relics", AncientRelics);
         w.WriteIntLists("events", Events);
         w.WriteIntLists("normals", Normals);
         w.WriteIntLists("elites", Elites);
         WriteDeques(w, "shared_relics", SharedRelics);
         WriteDeques(w, "player_relics", PlayerRelics);
+        w.WriteInts("treasure_relics", TreasureRelics);
+        w.WriteStartObject("first_shop");
+        w.WriteInts("cards", FirstShop.Cards);
+        w.WriteNumber("sale_index", FirstShop.SaleIndex);
+        w.WriteInts("colorless", FirstShop.Colorless);
+        w.WriteInts("relics", FirstShop.Relics);
+        w.WriteInts("potions", FirstShop.Potions);
+        w.WriteEndObject();
         w.WriteInts("neow", Neow);
         w.WriteStartArray("neow_outcomes");
         foreach (NeowOutcome o in NeowOutcomes)
@@ -157,6 +268,9 @@ public sealed class SimResult
             }
 
             w.WriteEndArray();
+            w.WriteNumber("first_gold", o.FirstGold);
+            w.WriteNumber("first_potion", o.FirstPotion);
+            w.WriteInts("first_cards", o.FirstCards);
             w.WriteEndObject();
         }
 
@@ -176,6 +290,10 @@ public sealed class SimResult
             w.WriteStartObject();
             w.WriteIntLists("points", map.Points);
             w.WriteIntLists("edges", map.Edges);
+            w.WriteNumber("max_path_elites", map.MaxPathElites);
+            w.WriteNumber("max_path_rests", map.MaxPathRests);
+            w.WriteNumber("max_path_shops", map.MaxPathShops);
+            w.WriteNumber("max_path_unknowns", map.MaxPathUnknowns);
             w.WriteEndObject();
         }
 
@@ -194,12 +312,18 @@ public sealed class SimResult
             ?? Diff("elite encounters", a.Elites, b.Elites)
             ?? Diff("bosses", a.Bosses, b.Bosses)
             ?? Diff("ancients", a.Ancients, b.Ancients)
+            ?? Diff("ancient relics", a.AncientRelics, b.AncientRelics)
             ?? Diff("second boss", [a.SecondBoss], [b.SecondBoss])
+            ?? Diff("treasure relics", a.TreasureRelics, b.TreasureRelics)
+            ?? Diff("first shop", FlattenShop(a.FirstShop), FlattenShop(b.FirstShop))
             ?? Diff("neow", a.Neow, b.Neow)
             ?? Diff("neow outcomes", Flatten(a.NeowOutcomes), Flatten(b.NeowOutcomes))
             ?? Diff("first reward", [a.Gold, a.Potion, .. a.Cards], [b.Gold, b.Potion, .. b.Cards])
             ?? DiffMaps(a.Maps, b.Maps);
     }
+
+    private static int[] FlattenShop(ShopResult s) =>
+        [.. s.Cards, -1, s.SaleIndex, -1, .. s.Colorless, -1, .. s.Relics, -1, .. s.Potions];
 
     private static string? DiffMaps(MapResult?[] a, MapResult?[] b)
     {
@@ -214,7 +338,11 @@ public sealed class SimResult
                 continue;
             }
 
-            string? diff = Diff($"act {i + 1} map points", a[i]!.Points, b[i]!.Points) ?? Diff($"act {i + 1} map edges", a[i]!.Edges, b[i]!.Edges);
+            string? diff = Diff($"act {i + 1} map points", a[i]!.Points, b[i]!.Points)
+                ?? Diff($"act {i + 1} map edges", a[i]!.Edges, b[i]!.Edges)
+                ?? Diff($"act {i + 1} map max paths",
+                    [a[i]!.MaxPathElites, a[i]!.MaxPathRests, a[i]!.MaxPathShops, a[i]!.MaxPathUnknowns],
+                    [b[i]!.MaxPathElites, b[i]!.MaxPathRests, b[i]!.MaxPathShops, b[i]!.MaxPathUnknowns]);
             if (diff != null)
                 return diff;
         }
@@ -223,7 +351,11 @@ public sealed class SimResult
     }
 
     private static int[][] Flatten(NeowOutcome[] outcomes) =>
-        outcomes.Select(o => (int[]) [.. Flatten(o), .. o.Nested.SelectMany(n => (int[]) [-2, .. Flatten(n.First), -2, .. Flatten(n.Second)])]).ToArray();
+        outcomes.Select(o => (int[]) [
+            .. Flatten(o),
+            -3, o.FirstGold, o.FirstPotion, .. o.FirstCards,
+            .. o.Nested.SelectMany(n => (int[]) [-2, .. Flatten(n.First), -2, .. Flatten(n.Second)])
+        ]).ToArray();
 
     private static int[] Flatten(NeowOutcome o) => [.. o.Cards, -1, .. o.Relics, -1, .. o.Potions];
 

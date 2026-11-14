@@ -3,6 +3,7 @@ using System.Runtime.CompilerServices;
 using HarmonyLib;
 using MegaCrit.Sts2.Core.Entities.Ascension;
 using MegaCrit.Sts2.Core.Entities.Cards;
+using MegaCrit.Sts2.Core.Entities.Merchant;
 using MegaCrit.Sts2.Core.Entities.Players;
 using MegaCrit.Sts2.Core.Entities.Relics;
 using MegaCrit.Sts2.Core.Events;
@@ -13,8 +14,8 @@ using MegaCrit.Sts2.Core.Map;
 using MegaCrit.Sts2.Core.Models;
 using MegaCrit.Sts2.Core.Models.Acts;
 using MegaCrit.Sts2.Core.Models.CardPools;
-using MegaCrit.Sts2.Core.Models.Relics;
 using MegaCrit.Sts2.Core.Models.RelicPools;
+using MegaCrit.Sts2.Core.Models.Relics;
 using MegaCrit.Sts2.Core.Odds;
 using MegaCrit.Sts2.Core.Random;
 using MegaCrit.Sts2.Core.Rewards;
@@ -66,7 +67,7 @@ public static class SeedSimulator
         RuntimeHelpers.RunClassConstructor(typeof(CardRarityOdds).TypeHandle);
 
         AscensionManager? previous = AscensionOverride;
-        AscensionOverride = new AscensionManager(ascension);
+        AscensionOverride = new AscensionManager(GameMode.Standard, ascension);
         try
         {
             return body();
@@ -117,7 +118,8 @@ public static class SeedSimulator
             new[] { player },
             acts.Select(a => a.ToMutable()).ToList(),
             Array.Empty<ModifierModel>(),
-            GameMode.Custom,
+            GameMode.Standard,
+            false,
             ascension,
             seed);
         return new Run(state, player, unlocks);
@@ -163,6 +165,11 @@ public static class SeedSimulator
         EncounterModel? secondBoss = state.Acts[^1].SecondBossEncounter;
         AncientEventModel? act1Ancient = rooms[0].HasAncient ? rooms[0].Ancient : null;
 
+        List<RelicDeque> sharedRelics = Deques(data, state.SharedRelicGrabBag);
+        List<RelicDeque> playerRelics = Deques(data, player.RelicGrabBag);
+        int[] treasureRelics = BuildTreasureRelics(data, state);
+        ShopResult firstShop = BuildFirstShop(data, player);
+
         SimResult result = new()
         {
             Seed = seed,
@@ -173,19 +180,71 @@ public static class SeedSimulator
             Events = rooms.Select(r => r.events.Select(e => data.Events.Id(e)).ToArray()).ToArray(),
             Normals = rooms.Select(r => r.normalEncounters.Select(e => data.Encounters.Id(e)).ToArray()).ToArray(),
             Elites = rooms.Select(r => r.eliteEncounters.Select(e => data.Encounters.Id(e)).ToArray()).ToArray(),
-            SharedRelics = Deques(data, state.SharedRelicGrabBag),
-            PlayerRelics = Deques(data, player.RelicGrabBag),
+            SharedRelics = sharedRelics,
+            PlayerRelics = playerRelics,
+            TreasureRelics = treasureRelics,
+            FirstShop = firstShop,
             Neow = act1Ancient != null && data.Ancients.Id(act1Ancient) == data.NeowId ? GetAncientOffers(data, act1Ancient, player, state) : [],
             Maps = state.Acts.Select((a, i) => parts.HasFlag(SimParts.Maps) ? BuildMap(state, a, i) : null).ToArray()
         };
 
         if (parts.HasFlag(SimParts.NeowOutcomes))
-            result.NeowOutcomes = result.Neow.Select(relic => NeowOutcome(data, seed, relic)).ToArray();
+            result.NeowOutcomes = result.Neow.Select(relic => NeowOutcome(data, seed, relic, rooms[0])).ToArray();
 
-        // Last, because it advances the player's rewards stream.
+        // Advance the player's rewards stream for the baseline Floor 1 combat reward before
+        // Act 2/3 Ancients (since Darv's DustyTome setup also draws from PlayerRng.Rewards).
         if (parts.HasFlag(SimParts.Reward))
             AddFirstReward(data, result, player, rooms[0]);
+
+        int[][] ancientRelics = new int[rooms.Count][];
+        ancientRelics[0] = result.Neow;
+        for (int i = 1; i < rooms.Count; i++)
+        {
+            state.CurrentActIndex = i;
+            ancientRelics[i] = rooms[i].HasAncient ? GetAncientOffers(data, rooms[i].Ancient, player, state) : [];
+        }
+
+        state.CurrentActIndex = 0;
+        result.AncientRelics = ancientRelics;
         return result;
+    }
+
+    private static int[] BuildTreasureRelics(GameData data, RunState state, int count = 6)
+    {
+        Rng rng = state.Rng.TreasureRoomRelics;
+        List<int> relics = new(count);
+        for (int i = 0; i < count; i++)
+        {
+            RelicRarity rarity = RelicFactory.RollRarity(rng);
+            RelicModel? pulled = state.SharedRelicGrabBag.PullFromFront(rarity, state);
+            if (pulled != null)
+                relics.Add(data.Relics.Id(pulled));
+        }
+
+        return relics.ToArray();
+    }
+
+    private static ShopResult BuildFirstShop(GameData data, Player player)
+    {
+        MerchantInventory inv = MerchantInventory.CreateForNormalMerchant(player);
+        int saleIndex = 0;
+        for (int i = 0; i < inv.CharacterCardEntries.Count; i++)
+        {
+            if (inv.CharacterCardEntries[i].IsOnSale)
+            {
+                saleIndex = i;
+                break;
+            }
+        }
+
+        return new ShopResult
+        {
+            Cards = inv.CharacterCardEntries.Where(e => e.CreationResult != null).Select(e => data.Cards.Id(e.CreationResult!.Card)).ToArray(),
+            SaleIndex = saleIndex,
+            Colorless = inv.ColorlessCardEntries.Where(e => e.CreationResult != null).Select(e => data.Cards.Id(e.CreationResult!.Card)).ToArray(),
+            Relics = inv.RelicEntries.Where(e => e.Model != null).Select(e => data.Relics.Id(e.Model!)).ToArray(),
+            Potions = inv.PotionEntries.Where(e => e.Model != null).Select(e => data.Potions.Id(e.Model!)).ToArray()
+        };
     }
 
     private static List<RelicDeque> Deques(GameData data, RelicGrabBag bag)
@@ -223,12 +282,22 @@ public static class SeedSimulator
 
     // What one Neow offer gives when it is taken, on runs of its own so that the relic is the
     // first thing to draw from its streams.
-    private static NeowOutcome NeowOutcome(GameData data, string seed, int relicId)
+    private static NeowOutcome NeowOutcome(GameData data, string seed, int relicId, RoomSet act1Rooms)
     {
         if (relicId < 0 || GameData.NeowGiveOf(data.Relics[relicId]) is not (_, int count))
-            return new NeowOutcome();
+        {
+            NeowOutcome empty = new();
+            PopulateFirstReward(data, StartRun(data, seed).Player, act1Rooms, out empty.FirstGold, out empty.FirstPotion, out empty.FirstCards);
+            return empty;
+        }
+
         if (data.Relics[relicId] is not NeowsBones)
-            return Obtain(data, StartRun(data, seed), relicId);
+        {
+            Run singleRun = StartRun(data, seed);
+            NeowOutcome outcome = Obtain(data, singleRun, relicId);
+            PopulateFirstReward(data, singleRun.Player, act1Rooms, out outcome.FirstGold, out outcome.FirstPotion, out outcome.FirstCards);
+            return outcome;
+        }
 
         // NeowsBones.AfterObtained: its relics are rewards that cannot be skipped, taken in the
         // order the player likes, and the curse is rolled once they have all been taken.
@@ -236,7 +305,7 @@ public static class SeedSimulator
         {
             Run run = StartRun(data, seed);
             List<RelicModel> valid = BonesRelics(run.Player);
-            run.Player.PlayerRng.Rewards.Shuffle(valid);
+            valid.UnstableShuffle(run.Player.PlayerRng.NonCombatGeneration);
             return (run, valid.Take(count).Select(r => data.Relics.Id(r)).ToArray());
         }
 
@@ -259,11 +328,16 @@ public static class SeedSimulator
             .Where(c => c.CanBeGeneratedByModifiers)
             .OrderBy(c => c.Id)
             .ToList();
+        int[] curseCards = last.Player.PlayerRng.NonCombatGeneration.NextItem(curses) is { } curse ? [data.Cards.Id(curse)] : [];
+        PopulateFirstReward(data, last.Player, act1Rooms, out int fg, out int fp, out int[] fc);
         return new NeowOutcome
         {
             Relics = given,
-            Cards = last.State.Rng.Niche.NextItem(curses) is { } curse ? [data.Cards.Id(curse)] : [],
-            Nested = nested
+            Cards = curseCards,
+            Nested = nested,
+            FirstGold = fg,
+            FirstPotion = fp,
+            FirstCards = fc
         };
     }
 
@@ -276,8 +350,9 @@ public static class SeedSimulator
         if (relicId < 0 || GameData.NeowGiveOf(data.Relics[relicId]) is not (_, int count))
             return outcome;
 
-        (RunState state, Player player, _) = run;
+        (_, Player player, _) = run;
         Rng rewards = player.PlayerRng.Rewards;
+        Rng nonCombat = player.PlayerRng.NonCombatGeneration;
         CardPoolModel pool = player.Character.CardPool;
         List<CardModel> cards = [];
         List<RelicModel> relics = [];
@@ -299,28 +374,28 @@ public static class SeedSimulator
                 potions.Add(PotionFactory.CreateRandomPotionOutOfCombat(player, rewards));
                 break;
             case ScrollBoxes:
-                cards.AddRange(ScrollBoxes.GenerateRandomBundles(player).SelectMany(bundle => bundle));
+                cards.AddRange(ScrollBoxes.GenerateRandomBundles(player, rewards).SelectMany(bundle => bundle));
                 break;
             case SmallCapsule or LargeCapsule:
                 for (int i = 0; i < count; i++)
                 {
-                    RelicModel pulled = RelicFactory.PullNextRelicFromFront(player);
+                    RelicModel pulled = RelicFactory.PullNextRelicForRewardFromFront(player);
                     relics.Add(pulled);
                     // WarPaint.AfterObtained and Whetstone.AfterObtained, against the starter deck.
-                    PickupUpgradeChoices(player, pulled)?.StableShuffle(state.Rng.Niche);
+                    PickupUpgradeChoices(player, pulled)?.StableShuffle(nonCombat);
                 }
 
                 break;
             case Kaleidoscope:
                 for (int i = 0; i < count; i++)
                 {
-                    foreach (CardPoolModel other in player.UnlockState.CharacterCardPools.Where(p => p != pool).ToList().StableShuffle(state.Rng.Niche).Take(3))
+                    foreach (CardPoolModel other in player.UnlockState.CharacterCardPools.Where(p => p != pool).ToList().StableShuffle(nonCombat).Take(3))
                         cards.AddRange(Create(1, new CardCreationOptions([other], CardCreationSource.Other, CardRarityOddsType.RegularEncounter).WithFlags(CardCreationFlags.NoCardPoolModifications)));
                 }
 
                 break;
             case PhialHolster:
-                potions.AddRange(PotionFactory.CreateRandomPotionsOutOfCombat(player, count, state.Rng.CombatPotionGeneration));
+                potions.AddRange(PotionFactory.CreateRandomPotionsOutOfCombat(player, count, nonCombat));
                 break;
             case LeafyPoultice:
                 CardModel?[] originals = [Basics().FirstOrDefault(c => c.Tags.Contains(CardTag.Strike)), Basics().FirstOrDefault(c => c.Tags.Contains(CardTag.Defend))];
@@ -333,7 +408,7 @@ public static class SeedSimulator
                 break;
             case NewLeaf:
                 if (Basics().FirstOrDefault() is { } chosen)
-                    cards.Add(CardFactory.CreateRandomCardForTransform(chosen, false, state.Rng.Niche));
+                    cards.Add(CardFactory.CreateRandomCardForTransform(chosen, false, player.PlayerRng.Transformations));
                 break;
         }
 
@@ -357,7 +432,7 @@ public static class SeedSimulator
         }
 
         List<MapPoint> points = map.GetAllMapPoints().ToList();
-        return new MapResult
+        MapResult res = new()
         {
             Points = points.Select(p => (int[]) [p.coord.col, p.coord.row, (int)p.PointType]).ToArray(),
             Edges = points
@@ -365,26 +440,34 @@ public static class SeedSimulator
                 .OrderBy(e => e[0]).ThenBy(e => e[1]).ThenBy(e => e[2]).ThenBy(e => e[3])
                 .ToArray()
         };
+        res.ComputeMaxPaths();
+        return res;
     }
 
     // RewardsSet.GenerateRewardsFor for a normal combat: potion roll, then gold, potion and cards
     // are populated in that order, all from the player's rewards stream.
     private static void AddFirstReward(GameData data, SimResult result, Player player, RoomSet act1Rooms)
     {
+        PopulateFirstReward(data, player, act1Rooms, out result.Gold, out result.Potion, out result.Cards);
+    }
+
+    private static void PopulateFirstReward(GameData data, Player player, RoomSet act1Rooms, out int goldAmount, out int potionId, out int[] cardIds)
+    {
         EncounterModel encounter = act1Rooms.normalEncounters[0];
         bool potionDropped = player.PlayerOdds.PotionReward.Roll(player, RoomType.Monster);
         GoldReward gold = new(encounter.MinGoldReward, encounter.MaxGoldReward, player);
         gold.Populate();
-        result.Gold = gold.Amount;
+        goldAmount = gold.Amount;
+        potionId = -1;
         if (potionDropped)
         {
             PotionModel? potion = PotionFactory.CreateRandomPotionOutOfCombat(player, player.PlayerRng.Rewards);
-            result.Potion = potion == null ? -1 : data.Potions.Id(potion);
+            potionId = potion == null ? -1 : data.Potions.Id(potion);
         }
 
         CardCreationOptions options = CardCreationOptions.ForRoom(player, RoomType.Monster)
             .WithFlags(CardCreationFlags.IsFromCombat)
             .WithFlags(CardCreationFlags.IsCardReward);
-        result.Cards = CardFactory.CreateForReward(player, 3, options).Select(c => data.Cards.Id(c.Card)).ToArray();
+        cardIds = CardFactory.CreateForReward(player, 3, options).Select(c => data.Cards.Id(c.Card)).ToArray();
     }
 }

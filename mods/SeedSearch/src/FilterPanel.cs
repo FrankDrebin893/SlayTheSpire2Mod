@@ -4,8 +4,9 @@ using MegaCrit.Sts2.Core.Rooms;
 namespace RasmusSlayTheSpire2Mod.SeedSearch;
 
 // The filters view of the seed search screen: a rail with one tab per kind of filter, in which the
-// thing to filter on is picked from a grid of game icons. The active filters are a separate list
-// (Active) that the screen keeps in its sidebar.
+// thing to filter on is picked from a grid of game icons. Clicking a tile in single-pick tabs adds
+// the filter immediately in one click. The active filters live in Active (sidebar), with inline
+// steppers for "within first N" / "min..max" and 1-click OR grouping.
 public sealed class FilterPanel
 {
     private readonly GameData _data;
@@ -16,12 +17,20 @@ public sealed class FilterPanel
     private readonly VBoxContainer _tabBar = new();
     private readonly PanelContainer _tabHost = Visuals.Panel(Visuals.PanelColor);
     private readonly ButtonGroup _tabGroup = new();
+    private readonly Button _orModeBtn = new()
+    {
+        Text = "+ Next as OR",
+        ToggleMode = true,
+        TooltipText = "When toggled on, the next filter you click will be combined with the last filter as an OR (Any Of) condition.",
+        FocusMode = Control.FocusModeEnum.None
+    };
 
     public HBoxContainer Root { get; } = new();
 
     public PanelContainer Active { get; } = Visuals.Panel(Visuals.PanelColor);
 
-    // notify shows one line of feedback, for things that happen away from where the player looks.
+    public event Action? Changed;
+
     public FilterPanel(GameData data, List<Cond> conds, Action<Visual> hover, Action<string> notify)
     {
         _data = data;
@@ -31,7 +40,7 @@ public sealed class FilterPanel
 
         Root.AddThemeConstantOverride("separation", 12);
         PanelContainer rail = Visuals.Panel(Visuals.PanelColor, 10);
-        rail.CustomMinimumSize = new Vector2(190, 0);
+        rail.CustomMinimumSize = new Vector2(195, 0);
         _tabBar.AddThemeConstantOverride("separation", 6);
         rail.AddChild(_tabBar);
         Root.AddChild(rail);
@@ -39,70 +48,224 @@ public sealed class FilterPanel
         Root.AddChild(_tabHost);
 
         VBoxContainer column = new();
-        column.AddThemeConstantOverride("separation", 10);
+        column.AddThemeConstantOverride("separation", 8);
         Active.AddChild(column);
+
         HBoxContainer title = new();
-        Label heading = Visuals.SectionTitle("Filters");
+        title.AddThemeConstantOverride("separation", 6);
+        Label heading = Visuals.SectionTitle("Active Filters", 22);
         heading.SizeFlagsHorizontal = Control.SizeFlags.ExpandFill;
         title.AddChild(heading);
-        Button save = new() { Text = "Save search", TooltipText = "Keep these filters under the Saved tab", FocusMode = Control.FocusModeEnum.None };
+        _orModeBtn.AddThemeFontSizeOverride("font_size", 15);
+        title.AddChild(_orModeBtn);
+        Button save = new() { Text = "Save", TooltipText = "Keep these filters under the Saved tab", FocusMode = Control.FocusModeEnum.None };
+        save.AddThemeFontSizeOverride("font_size", 15);
         save.Pressed += SaveSearch;
         title.AddChild(save);
+        Button clear = new() { Text = "Clear", TooltipText = "Remove all active filters", FocusMode = Control.FocusModeEnum.None };
+        clear.AddThemeFontSizeOverride("font_size", 15);
+        clear.Pressed += () =>
+        {
+            if (_conds.Count == 0)
+                return;
+            _conds.Clear();
+            RefreshChips();
+            _notify("Cleared all filters.");
+        };
+        title.AddChild(clear);
         column.AddChild(title);
+
         ScrollContainer chipScroll = new() { SizeFlagsVertical = Control.SizeFlags.ExpandFill, HorizontalScrollMode = ScrollContainer.ScrollMode.Disabled };
         _chips.AddThemeConstantOverride("separation", 6);
         chipScroll.AddChild(_chips);
         column.AddChild(chipScroll);
 
         if (_data.NeowRelics.Length > 0)
-            AddTab(Visuals.Relic(_data, _data.NeowRelics[0]) with { Name = "Neow" }, NeowTab);
-        AddTab(Visuals.Named("Acts & bosses", Visuals.Load("res://images/ui/run_history/elite.png")), ActTab);
+            AddTab(Visuals.Relic(_data, _data.NeowRelics[0]) with { Name = "Neow (Act 1)" }, NeowTab);
+        AddTab(Visuals.Named("Ancients (Act 2/3)", Visuals.Load("res://images/ui/run_history/event.png")), AncientTab);
+        AddTab(Visuals.Named("Chests & Shop", Visuals.Load("res://images/ui/run_history/shop.png")), ShopAndChestTab);
+        AddTab(Visuals.Named("First Reward", Visuals.Load("res://images/ui/run_history/monster.png")), RewardTab);
+        AddTab(Visuals.Named("Acts & Bosses", Visuals.Load("res://images/ui/run_history/elite.png")), ActTab);
         AddTab(Visuals.Named("Events", Visuals.Load("res://images/ui/run_history/event.png")), EventTab);
-        AddTab(Visuals.Named("Fights", Visuals.Load("res://images/ui/run_history/monster.png")), FightTab);
-        AddTab(Visuals.Named("Relics", Visuals.Load("res://images/ui/run_history/treasure.png")), RelicTab);
-        AddTab(Visuals.Named("Map", Visuals.Load("res://images/ui/run_history/rest_site.png")), MapTab);
-        AddTab(Visuals.Named("First reward", Visuals.Load("res://images/ui/run_history/shop.png")), RewardTab);
-        AddTab(Visuals.Named("Saved"), SavedTab);
+        AddTab(Visuals.Named("Fights & Elites", Visuals.Load("res://images/ui/run_history/monster.png")), FightTab);
+        AddTab(Visuals.Named("Relic Bags", Visuals.Load("res://images/ui/run_history/treasure.png")), RelicTab);
+        AddTab(Visuals.Named("Map & Paths", Visuals.Load("res://images/ui/run_history/rest_site.png")), MapTab);
+        AddTab(Visuals.Named("Saved Searches"), SavedTab);
         RefreshChips();
     }
 
     // ---- active filters ----
 
-    private void RefreshChips()
+    public void RefreshChips()
     {
         Visuals.Clear(_chips);
         if (_conds.Count == 0)
         {
-            _chips.AddChild(Visuals.MutedLabel("No filters yet. Pick something in the Filters view and add it. A seed must match every filter."));
+            _chips.AddChild(Visuals.MutedLabel(
+                "No filters yet. Click any item in the picker on the left to add it in 1 click.\n" +
+                "• Use 'OR↑' or '+ Next as OR' to match ANY OF several options.\n" +
+                "• Use '− / +' on a filter to adjust how early it must appear.", 15));
+            Changed?.Invoke();
+            return;
         }
 
-        foreach (Cond cond in _conds.ToList())
+        for (int i = 0; i < _conds.Count; i++)
         {
+            int index = i;
+            Cond cond = _conds[i];
             Visual visual = VisualOf(cond);
-            Button chip = Visuals.Pill(visual with { Name = "Remove this filter" }, _ => _hover(visual), $"{cond.Describe(_data)}   ✕");
+
+            HBoxContainer row = new();
+            row.AddThemeConstantOverride("separation", 4);
+
+            Button chip = Visuals.Pill(visual with { Name = "Click to remove this filter" }, _ => _hover(visual), cond.Describe(_data));
+            chip.SizeFlagsHorizontal = Control.SizeFlags.ExpandFill;
             chip.Alignment = HorizontalAlignment.Left;
             chip.AutowrapMode = TextServer.AutowrapMode.WordSmart;
             chip.Pressed += () =>
             {
-                _conds.Remove(cond);
+                _conds.RemoveAt(index);
                 RefreshChips();
             };
-            _chips.AddChild(chip);
+            row.AddChild(chip);
+
+            if (cond.WithinStepper is { } ws)
+            {
+                Button minus = MiniButton("−", "Require earlier in the run", ws.Value <= 1);
+                minus.Pressed += () => ReplaceAt(index, ws.With(Math.Max(1, ws.Value - 1)));
+                Button plus = MiniButton("+", "Allow later in the run", ws.Value >= ws.Max);
+                plus.Pressed += () => ReplaceAt(index, ws.With(Math.Min(ws.Max, ws.Value + 1)));
+                row.AddChild(minus);
+                row.AddChild(plus);
+            }
+            else if (cond.RangeStepper is { } rs)
+            {
+                Button minus = MiniButton("−", "Lower minimum count", rs.Min <= 0);
+                minus.Pressed += () => ReplaceAt(index, rs.With(Math.Max(0, rs.Min - 1), rs.Max));
+                Button plus = MiniButton("+", "Raise minimum count", rs.Min >= rs.Limit);
+                plus.Pressed += () =>
+                {
+                    int nextMin = Math.Min(rs.Limit, rs.Min + 1);
+                    ReplaceAt(index, rs.With(nextMin, Math.Max(nextMin, rs.Max)));
+                };
+                row.AddChild(minus);
+                row.AddChild(plus);
+            }
+
+            if (cond is AnyOfCond any)
+            {
+                Button split = MiniButton("Split", "Unpack this OR group into separate filters");
+                split.Pressed += () =>
+                {
+                    _conds.RemoveAt(index);
+                    int insertAt = index;
+                    foreach (Cond sub in any.Conds)
+                    {
+                        if (Feasibility.Conflict(_data, _conds, sub) == null)
+                            _conds.Insert(insertAt++, sub);
+                    }
+
+                    RefreshChips();
+                };
+                row.AddChild(split);
+            }
+
+            if (index > 0)
+            {
+                Button mergeOr = MiniButton("OR↑", "Combine with the filter above as an OR (Any Of) group");
+                mergeOr.Pressed += () => MergeAsOr(index - 1, index);
+                row.AddChild(mergeOr);
+            }
+
+            Button remove = MiniButton("✕", "Remove this filter");
+            remove.Pressed += () =>
+            {
+                _conds.RemoveAt(index);
+                RefreshChips();
+            };
+            row.AddChild(remove);
+
+            _chips.AddChild(row);
         }
+
+        Changed?.Invoke();
+    }
+
+    private static Button MiniButton(string text, string tooltip, bool disabled = false)
+    {
+        Button b = new()
+        {
+            Text = text,
+            TooltipText = tooltip,
+            Disabled = disabled,
+            FocusMode = Control.FocusModeEnum.None,
+            SizeFlagsVertical = Control.SizeFlags.ShrinkCenter
+        };
+        b.AddThemeFontSizeOverride("font_size", 14);
+        return b;
+    }
+
+    private void ReplaceAt(int index, Cond replacement)
+    {
+        List<Cond> others = _conds.Where((_, i) => i != index).ToList();
+        if (Feasibility.Conflict(_data, others, replacement) is { } reason)
+        {
+            _notify($"Cannot adjust: {reason}");
+            return;
+        }
+
+        _conds[index] = replacement;
+        RefreshChips();
+    }
+
+    private void MergeAsOr(int firstIdx, int secondIdx)
+    {
+        Cond a = _conds[firstIdx];
+        Cond b = _conds[secondIdx];
+        Cond[] combined = (a is AnyOfCond anyA ? anyA.Conds : [a])
+            .Concat(b is AnyOfCond anyB ? anyB.Conds : [b])
+            .Distinct()
+            .ToArray();
+        _conds.RemoveAt(secondIdx);
+        _conds[firstIdx] = combined.Length == 1 ? combined[0] : new AnyOfCond(combined);
+        RefreshChips();
+        _notify("Combined into an OR (Any Of) filter.");
     }
 
     private void Add(Cond? cond)
     {
-        if (cond == null || _conds.Contains(cond))
+        if (cond == null)
             return;
+
+        if (_orModeBtn.ButtonPressed && _conds.Count > 0)
+        {
+            _orModeBtn.ButtonPressed = false;
+            Cond prev = _conds[^1];
+            Cond[] combined = (prev is AnyOfCond anyP ? anyP.Conds : [prev])
+                .Concat(cond is AnyOfCond anyC ? anyC.Conds : [cond])
+                .Distinct()
+                .ToArray();
+            _conds[^1] = combined.Length == 1 ? combined[0] : new AnyOfCond(combined);
+            RefreshChips();
+            _notify($"Added to OR group: {cond.Describe(_data)}");
+            return;
+        }
+
+        if (_conds.Contains(cond))
+        {
+            _notify($"Already in active filters: {cond.Describe(_data)}");
+            return;
+        }
+
         if (Feasibility.Conflict(_data, _conds, cond) is { } reason)
         {
-            _notify($"Not added. {reason}");
+            _notify($"Not added ({reason}) — Tip: toggle '+ Next as OR' to add it as an alternative.");
             return;
         }
 
         _conds.Add(cond);
         RefreshChips();
+        _notify($"Added: {cond.Describe(_data)}");
     }
 
     private void SaveSearch()
@@ -114,7 +277,7 @@ public sealed class FilterPanel
         }
 
         SavedData.RecordSearch(_data, _conds, keep: true);
-        _notify("Search saved. It is under the Saved tab.");
+        _notify("Search saved under the Saved Searches tab.");
     }
 
     private void Load(SavedSearch search)
@@ -143,11 +306,16 @@ public sealed class FilterPanel
         BossCond c => Visuals.Encounter(_data, c.Encounter, RoomType.Boss),
         SecondBossCond c => Visuals.Encounter(_data, c.Encounter, RoomType.Boss),
         AncientCond c => Visuals.Ancient(_data, c.Ancient),
+        AncientRelicCond c => Visuals.Relic(_data, c.Relic),
         EventCond c => Visuals.Event(_data, c.Event),
         EncounterCond c => Visuals.Encounter(_data, c.Encounter, c.Elite ? RoomType.Elite : RoomType.Monster),
         RelicCond c => Visuals.Relic(_data, c.Relic),
+        TreasureRelicCond c => Visuals.Relic(_data, c.Relic),
+        ShopItemCond c => Given(c.What, c.Item),
         MapCountCond c => Visuals.MapType(Math.Max(0, Array.FindIndex(Visuals.MapTypes, t => t.Type == c.PointType))),
+        MapPathCond c => Visuals.MapType(Math.Max(0, Array.FindIndex(Visuals.MapTypes, t => t.Type == c.PointType))),
         RewardCardCond c => Visuals.Card(_data, c.Card),
+        AnyOfCond { Conds.Length: > 0 } c => VisualOf(c.Conds[0]),
         _ => Visuals.Named(cond.Describe(_data))
     };
 
@@ -160,13 +328,12 @@ public sealed class FilterPanel
 
     // ---- tabs ----
 
-    // Tabs are built the first time they are opened, so opening the screen stays quick.
     private void AddTab(Visual visual, Func<Control> build)
     {
         Button tab = Visuals.Pill(visual, _ => { });
         tab.Alignment = HorizontalAlignment.Left;
-        tab.CustomMinimumSize = new Vector2(0, 44);
-        tab.AddThemeFontSizeOverride("font_size", 18);
+        tab.CustomMinimumSize = new Vector2(0, 42);
+        tab.AddThemeFontSizeOverride("font_size", 17);
         tab.ToggleMode = true;
         tab.ButtonGroup = _tabGroup;
         Control? content = null;
@@ -191,30 +358,32 @@ public sealed class FilterPanel
         IconGrid relics = new(_hover);
         relics.SetItems(_data.NeowRelics.Select(r => (r, Visuals.Relic(_data, r, _data.NeowCurses.Contains(r)))));
         IconGrid gives = new(_hover, optional: true);
-        // Neow's Bones gives relics that roll things of their own.
         IconGrid nested = new(_hover, optional: true);
 
-        // One step per column, left to right; the later ones are only there when they apply.
-        (VBoxContainer Box, Label Note) Column(string title, IconGrid grid)
+        Button quickAddOffer = new() { Text = "+ Add Neow offer (any outcome)", Disabled = true, FocusMode = Control.FocusModeEnum.None };
+        Button quickAddGives = new() { Text = "+ Add Neow's Bones relic (any outcome)", Visible = false, FocusMode = Control.FocusModeEnum.None };
+
+        (VBoxContainer Box, Label Note) Column(string title, Control? topAction, IconGrid grid)
         {
             VBoxContainer box = new() { SizeFlagsHorizontal = Control.SizeFlags.ExpandFill, SizeFlagsVertical = Control.SizeFlags.ExpandFill };
             box.AddThemeConstantOverride("separation", 6);
             box.AddChild(new Label { Text = title });
             Label note = Visuals.MutedLabel("", 14);
             box.AddChild(note);
+            if (topAction != null)
+                box.AddChild(topAction);
             box.AddChild(grid.Root);
             return (box, note);
         }
 
-        (VBoxContainer offerColumn, Label offerNote) = Column("1. Neow offers", relics);
-        (VBoxContainer givesColumn, Label givesNote) = Column("2. What it must give", gives);
-        (VBoxContainer nestedColumn, Label nestedNote) = Column("3. What that must give in turn", nested);
+        (VBoxContainer offerColumn, Label offerNote) = Column("1. Pick a Neow relic", null, relics);
+        (VBoxContainer givesColumn, Label givesNote) = Column("2. Click what it must give (or click button below)", quickAddOffer, gives);
+        (VBoxContainer nestedColumn, Label nestedNote) = Column("3. Click what that relic must give", quickAddGives, nested);
         HBoxContainer columns = new() { SizeFlagsVertical = Control.SizeFlags.ExpandFill };
         columns.AddThemeConstantOverride("separation", 16);
         foreach (Control column in new[] { offerColumn, givesColumn, nestedColumn })
             columns.AddChild(column);
 
-        // These grids mix cards, relics and potions, told apart by a stride on the id.
         const int stride = 1_000_000;
         IEnumerable<(string, IEnumerable<(int, Visual)>)> Mixed((int[] Cards, int[] Relics, int[] Potions) options) =>
             new[]
@@ -222,6 +391,18 @@ public sealed class FilterPanel
                 ("Relics", options.Relics.Select(g => ((int)GiveItem.Relic * stride + g, Visuals.Relic(_data, g)))),
                 ("Potions", options.Potions.Select(p => ((int)GiveItem.Potion * stride + p, Visuals.Potion(_data, p))))
             }.Concat(CardGroups(options.Cards, (int)GiveItem.Card * stride));
+
+        quickAddOffer.Pressed += () =>
+        {
+            if (relics.Selected is { } r)
+                Add(new NeowOfferCond(r));
+        };
+
+        quickAddGives.Pressed += () =>
+        {
+            if (relics.Selected is { } r && gives.Selected is { } given)
+                Add(new NeowGivesCond(r, (GiveItem)(given / stride), given % stride));
+        };
 
         void ShowNested()
         {
@@ -232,7 +413,10 @@ public sealed class FilterPanel
             nested.SetGroups(Mixed(options));
             bool any = options.Cards.Length + options.Relics.Length + options.Potions.Length > 0;
             nestedColumn.Visible = any;
-            nestedNote.Text = any ? $"Optional: what {_data.RelicName(via!.Value)} gives. Leave unpicked for anything." : "";
+            quickAddGives.Visible = any && via != null;
+            if (via is { } vId)
+                quickAddGives.Text = $"+ Require {_data.RelicName(vId)} (any outcome)";
+            nestedNote.Text = any ? $"Click an item {_data.RelicName(via!.Value)} gives to add it immediately:" : "";
         }
 
         void ShowGives()
@@ -243,42 +427,181 @@ public sealed class FilterPanel
             gives.SetGroups(Mixed(options));
             bool any = options.Cards.Length + options.Relics.Length + options.Potions.Length > 0;
             givesColumn.Visible = any;
-            givesNote.Text = any ? $"Optional: what {_data.RelicName(relics.Selected!.Value)} gives. Leave unpicked for anything." : "";
-            offerNote.Text = relics.Selected is { } picked && !any
-                ? $"{_data.RelicName(picked)} rolls nothing when you take it."
-                : "Red frames are the cursed offers.";
+            quickAddOffer.Disabled = relics.Selected == null;
+            if (relics.Selected is { } selRelic)
+            {
+                quickAddOffer.Text = $"+ Just require Neow offers {_data.RelicName(selRelic)}";
+                if (!any)
+                {
+                    // Relic rolls nothing: 1-click adds it immediately!
+                    Add(new NeowOfferCond(selRelic));
+                }
+            }
+
+            givesNote.Text = any ? $"Click any outcome below to add in 1 click, or click the button above for any {_data.RelicName(relics.Selected!.Value)}:" : "";
+            offerNote.Text = "Relics without random rolls are added in 1 click. Red frames are cursed offers.";
             ShowNested();
         }
 
         relics.Changed += ShowGives;
-        gives.Changed += ShowNested;
+        gives.Changed += () =>
+        {
+            ShowNested();
+            if (relics.Selected is { } r && gives.Selected is { } item && !nestedColumn.Visible)
+            {
+                Add(new NeowGivesCond(r, (GiveItem)(item / stride), item % stride));
+            }
+        };
+        nested.Changed += () =>
+        {
+            if (relics.Selected is { } r && gives.Selected is { } item && nested.Selected is { } inner)
+            {
+                Add(new NeowNestedCond(r, item % stride, (GiveItem)(inner / stride), inner % stride));
+            }
+        };
         ShowGives();
 
-        (Control tab, Action refresh) = Tab("One of Neow's three offers, and if you like what it gives when you take it.",
+        return SimpleTab(
+            "Click a Neow relic. Relics without random rolls add in 1 click; relics that roll cards/relics/potions let you pick their outcome.",
             [],
-            [columns],
-            [],
-            () => relics.Selected is not { } relic
-                ? null
-                : gives.Selected is not { } item
-                    ? new NeowOfferCond(relic)
-                    : nested.Selected is { } inner
-                        ? new NeowNestedCond(relic, item % stride, (GiveItem)(inner / stride), inner % stride)
-                        : new NeowGivesCond(relic, (GiveItem)(item / stride), item % stride));
-        foreach (IconGrid grid in new[] { relics, gives, nested })
-            grid.Changed += refresh;
-        return tab;
+            [columns]);
+    }
+
+    private Control AncientTab()
+    {
+        Choice slot = new([(1, "Act 2"), (2, "Act 3")]);
+        Choice mode = new([(0, "Ancient Relic Offering"), (1, "Which Ancient Appears")]);
+        IconGrid grid = new(_hover, onClick: id =>
+        {
+            if (mode.Value == 1)
+                Add(new AncientCond(slot.Value, id));
+            else
+                Add(new AncientRelicCond(slot.Value, id));
+        });
+
+        void Refill()
+        {
+            int s = slot.Value;
+            if (mode.Value == 1)
+            {
+                int[] ancients = SlotItems(s, a => a.Ancients).Concat(_data.SharedAncients).Distinct().ToArray();
+                grid.SetItems(ancients.Select(a => (a, Visuals.Ancient(_data, a))));
+            }
+            else
+            {
+                int[] ancients = SlotItems(s, a => a.Ancients).Concat(_data.SharedAncients).Distinct().ToArray();
+                var groups = ancients
+                    .Select(a => (
+                        Heading: $"{_data.AncientName(a)} relics",
+                        Items: _data.AncientRelicOptions(s, a)
+                            .OrderBy(_data.RelicName, StringComparer.CurrentCultureIgnoreCase)
+                            .Select(r => (r, Visuals.Relic(_data, r)))))
+                    .Where(g => g.Items.Any());
+                grid.SetGroups(groups);
+            }
+        }
+
+        slot.Changed += Refill;
+        mode.Changed += Refill;
+        Refill();
+
+        return SimpleTab(
+            "Click any Ancient or Ancient relic below to require it in Act 2 or Act 3 (1 click). Note: Selecting a specific Ancient relic checks the Ancient rolled for that Act.",
+            [slot.Root, mode.Root],
+            [grid.Root]);
+    }
+
+    private Control ShopAndChestTab()
+    {
+        const int shopCards = 0, shopRelics = 1, shopPotions = 2, chests = 3;
+        Choice mode = new([
+            (shopCards, "First Shop: Cards"),
+            (shopRelics, "First Shop: Relics"),
+            (shopPotions, "First Shop: Potions"),
+            (chests, "Treasure Chest Relics")
+        ]);
+        SpinBox within = Visuals.Spin(1, 6, 2);
+        HBoxContainer chestOpts = new();
+        chestOpts.AddThemeConstantOverride("separation", 6);
+        chestOpts.AddChild(new Label { Text = "within first" });
+        chestOpts.AddChild(within);
+        chestOpts.AddChild(new Label { Text = "chests" });
+
+        IconGrid grid = new(_hover, onClick: id =>
+        {
+            switch (mode.Value)
+            {
+                case shopCards:
+                    Add(new ShopItemCond(GiveItem.Card, id));
+                    break;
+                case shopRelics:
+                    Add(new ShopItemCond(GiveItem.Relic, id));
+                    break;
+                case shopPotions:
+                    Add(new ShopItemCond(GiveItem.Potion, id));
+                    break;
+                case chests:
+                    Add(new TreasureRelicCond(id, (int)within.Value));
+                    break;
+            }
+        });
+
+        void Refill()
+        {
+            chestOpts.Visible = mode.Value == chests;
+            switch (mode.Value)
+            {
+                case shopCards:
+                    grid.SetGroups(CardGroups(_data.ShopCardOptions));
+                    break;
+                case shopRelics:
+                    grid.SetGroups(_data.ShopRelicOptions
+                        .GroupBy(r => _data.Relics[r].Rarity)
+                        .OrderBy(g => g.Key)
+                        .Select(g => ($"{g.Key} relics", g.OrderBy(_data.RelicName, StringComparer.CurrentCultureIgnoreCase).Select(r => (r, Visuals.Relic(_data, r))))));
+                    break;
+                case shopPotions:
+                    grid.SetGroups(_data.PotionOptions
+                        .GroupBy(p => _data.Potions[p].Rarity)
+                        .OrderBy(g => g.Key)
+                        .Select(g => ($"{g.Key} potions", g.OrderBy(_data.PotionName, StringComparer.CurrentCultureIgnoreCase).Select(p => (p, Visuals.Potion(_data, p))))));
+                    break;
+                case chests:
+                    grid.SetGroups(_data.TreasureRelicOptions
+                        .GroupBy(r => _data.Relics[r].Rarity)
+                        .OrderBy(g => g.Key)
+                        .Select(g => ($"{g.Key} chest relics", g.OrderBy(_data.RelicName, StringComparer.CurrentCultureIgnoreCase).Select(r => (r, Visuals.Relic(_data, r))))));
+                    break;
+            }
+        }
+
+        mode.Changed += Refill;
+        Refill();
+
+        return SimpleTab(
+            "Click any item to require it in the First Merchant Shop (5 character cards, 2 colorless cards, 3 relics, 3 potions) or in the first N Treasure Chests.",
+            [mode.Root, chestOpts],
+            [grid.Root]);
     }
 
     private Control ActTab()
     {
-        const int boss = 0, ancient = 1, act = 2, secondBoss = 3;
+        const int boss = 0, act = 1, secondBoss = 2;
         Choice slot = SlotChoice();
-        List<(int, string)> kinds = [(boss, "Boss"), (ancient, "Ancient"), (act, "Act")];
+        List<(int, string)> kinds = [(boss, "Act Boss"), (act, "Act Biome")];
         if (_data.DoubleBoss)
-            kinds.Add((secondBoss, "Second final boss"));
+            kinds.Add((secondBoss, "Second Final Boss (A10)"));
         Choice kind = new(kinds);
-        IconGrid grid = new(_hover);
+        IconGrid grid = new(_hover, onClick: id =>
+        {
+            Cond c = kind.Value switch
+            {
+                act => new ActCond(slot.Value, id),
+                secondBoss => new SecondBossCond(id),
+                _ => new BossCond(slot.Value, id)
+            };
+            Add(c);
+        });
 
         void Refill()
         {
@@ -286,7 +609,6 @@ public sealed class FilterPanel
             slot.Root.Visible = kind.Value != secondBoss;
             grid.SetItems(kind.Value switch
             {
-                ancient => SlotItems(s, a => a.Ancients).Concat(s > 0 ? _data.SharedAncients : []).Select(a => (a, Visuals.Ancient(_data, a))),
                 act => _data.SlotActs[s].Select(a => (a, Visuals.Named(_data.ActName(a)))),
                 _ => SlotItems(s, a => a.Boss).Select(e => (e, Visuals.Encounter(_data, e, RoomType.Boss)))
             });
@@ -296,120 +618,180 @@ public sealed class FilterPanel
         kind.Changed += Refill;
         Refill();
 
-        (Control tab, Action refresh) = Tab("Which act a slot rolls, and its boss and ancient.", [kind.Root, slot.Root], [grid.Root], [], () =>
-            grid.Selected is not { } id
-                ? null
-                : kind.Value switch
-                {
-                    ancient => new AncientCond(slot.Value, id),
-                    act => new ActCond(slot.Value, id),
-                    secondBoss => new SecondBossCond(id),
-                    _ => new BossCond(slot.Value, id)
-                });
-        slot.Changed += refresh;
-        kind.Changed += refresh;
-        grid.Changed += refresh;
-        return tab;
+        return SimpleTab(
+            "Click any Boss or Act below to add it in 1 click.",
+            [kind.Root, slot.Root],
+            [grid.Root]);
     }
 
     private Control EventTab()
     {
         Choice slot = SlotChoice();
-        IconGrid grid = new(_hover);
+        SpinBox within = Visuals.Spin(1, 15, 3);
+        IconGrid grid = new(_hover, onClick: e => Add(new EventCond(slot.Value, e, (int)within.Value)));
         void Refill() => grid.SetItems(SlotItems(slot.Value, a => a.Events).Select(e => (e, Visuals.Event(_data, e))));
         slot.Changed += Refill;
         Refill();
-        SpinBox within = Visuals.Spin(1, 20, 3);
-        (Control tab, Action refresh) = Tab("Events are queued per act; each unknown room that rolls an event takes the next one.",
-            [slot.Root], [grid.Root], [new Label { Text = "within the first" }, within],
-            () => grid.Selected is { } e ? new EventCond(slot.Value, e, (int)within.Value) : null);
-        slot.Changed += refresh;
-        grid.Changed += refresh;
-        within.ValueChanged += _ => refresh();
-        return tab;
+
+        HBoxContainer withinBox = new();
+        withinBox.AddThemeConstantOverride("separation", 6);
+        withinBox.AddChild(new Label { Text = "within first" });
+        withinBox.AddChild(within);
+        withinBox.AddChild(new Label { Text = "events" });
+
+        return SimpleTab(
+            "Click any Event below to require it among the first N queued events of the chosen Act.",
+            [slot.Root, withinBox],
+            [grid.Root]);
     }
 
     private Control FightTab()
     {
         Choice slot = SlotChoice();
-        Choice kind = new([(0, "Fight"), (1, "Elite")]);
-        IconGrid grid = new(_hover);
+        Choice kind = new([(0, "Normal Fight"), (1, "Elite Fight")]);
         SpinBox within = Visuals.Spin(1, 15, 1);
+        IconGrid grid = new(_hover, onClick: e => Add(new EncounterCond(slot.Value, kind.Value == 1, e, (int)within.Value)));
         void Refill() => grid.SetItems(_data.FightOptions(slot.Value, kind.Value == 1, (int)within.Value)
             .Select(e => (e, Visuals.Encounter(_data, e, kind.Value == 1 ? RoomType.Elite : RoomType.Monster))));
         slot.Changed += Refill;
         kind.Changed += Refill;
         within.ValueChanged += _ => Refill();
         Refill();
-        (Control tab, Action refresh) = Tab("Fights and elites are queued per act in the order you will meet them. An act opens with its easy fights; raise the number below to pick from the ones after them.",
-            [kind.Root, slot.Root], [grid.Root], [new Label { Text = "within the first" }, within],
-            () => grid.Selected is { } e ? new EncounterCond(slot.Value, kind.Value == 1, e, (int)within.Value) : null);
-        slot.Changed += refresh;
-        kind.Changed += refresh;
-        grid.Changed += refresh;
-        within.ValueChanged += _ => refresh();
-        return tab;
+
+        HBoxContainer withinBox = new();
+        withinBox.AddThemeConstantOverride("separation", 6);
+        withinBox.AddChild(new Label { Text = "within first" });
+        withinBox.AddChild(within);
+        withinBox.AddChild(new Label { Text = "fights" });
+
+        return SimpleTab(
+            "Click any Fight or Elite to require it among the first N encounters of the Act. (Raise 'within first' above 3 to include hard pool normal fights.)",
+            [kind.Root, slot.Root, withinBox],
+            [grid.Root]);
     }
 
     private Control RelicTab()
     {
-        Choice bag = new([(0, "Your bag"), (1, "Shared bag")]);
-        IconGrid grid = new(_hover);
+        Choice bag = new([(0, "Your Relic Bag"), (1, "Shared Relic Bag")]);
+        SpinBox within = Visuals.Spin(1, 15, 3);
+        IconGrid grid = new(_hover, onClick: r => Add(new RelicCond(bag.Value == 1, r, (int)within.Value)));
         void Refill() => grid.SetGroups((bag.Value == 1 ? _data.SharedBagDealt : _data.PlayerBag)
             .GroupBy(r => _data.Relics[r].Rarity)
             .OrderBy(g => g.Key)
             .Select(g => (g.Key.ToString(), g.OrderBy(_data.RelicName, StringComparer.CurrentCultureIgnoreCase).Select(r => (r, Visuals.Relic(_data, r))))));
         bag.Changed += Refill;
         Refill();
-        SpinBox within = Visuals.Spin(1, 30, 3);
-        (Control tab, Action refresh) = Tab("Relic rewards are dealt from a shuffled bag per rarity. Frames show the rarity.",
-            [bag.Root], [grid.Root], [new Label { Text = "within the first" }, within, new Label { Text = "of its rarity" }],
-            () => grid.Selected is { } r ? new RelicCond(bag.Value == 1, r, (int)within.Value) : null);
-        bag.Changed += refresh;
-        grid.Changed += refresh;
-        within.ValueChanged += _ => refresh();
-        return tab;
+
+        HBoxContainer withinBox = new();
+        withinBox.AddThemeConstantOverride("separation", 6);
+        withinBox.AddChild(new Label { Text = "within first" });
+        withinBox.AddChild(within);
+        withinBox.AddChild(new Label { Text = "of its rarity" });
+
+        return SimpleTab(
+            "Click any Relic below to require it near the front of its rarity queue in Your Bag or the Shared Bag.",
+            [bag.Root, withinBox],
+            [grid.Root]);
     }
 
     private Control MapTab()
     {
         Choice slot = SlotChoice();
-        IconGrid grid = new(_hover);
-        grid.SetItems(Enumerable.Range(0, Visuals.MapTypes.Length).Select(i => (i, Visuals.MapType(i))));
-        SpinBox min = Visuals.Spin(0, 40, 0);
-        SpinBox max = Visuals.Spin(0, 40, 4);
-        (Control tab, Action refresh) = Tab("Counts over the whole act map. Map filters are the slowest to search.",
-            [slot.Root], [grid.Root], [new Label { Text = "from" }, min, new Label { Text = "to" }, max], () =>
-            {
-                if (grid.Selected is not { } i)
-                    return null;
-                (int type, _, string name, _) = Visuals.MapTypes[i];
-                int lo = (int)Math.Min(min.Value, max.Value), hi = (int)Math.Max(min.Value, max.Value);
-                return new MapCountCond(slot.Value, type, name, lo, hi);
-            });
-        slot.Changed += refresh;
-        grid.Changed += refresh;
-        min.ValueChanged += _ => refresh();
-        max.ValueChanged += _ => refresh();
-        return tab;
+        Choice mode = new([(0, "Best Single Path (Reachable)"), (1, "Whole Map Total")]);
+        SpinBox min = Visuals.Spin(0, 25, 3);
+        SpinBox max = Visuals.Spin(0, 25, 10);
+
+        IconGrid grid = new(_hover, onClick: i =>
+        {
+            (int type, _, string name, _) = Visuals.MapTypes[i];
+            int lo = (int)Math.Min(min.Value, max.Value), hi = (int)Math.Max(min.Value, max.Value);
+            if (mode.Value == 0)
+                Add(new MapPathCond(slot.Value, type, name, lo, hi));
+            else
+                Add(new MapCountCond(slot.Value, type, name, lo, hi));
+        });
+
+        void Refill()
+        {
+            // For single-path DP, the first 4 types (Elites, Rests, Shops, Unknowns) are supported.
+            int count = mode.Value == 0 ? 4 : Visuals.MapTypes.Length;
+            grid.SetItems(Enumerable.Range(0, count).Select(i => (i, Visuals.MapType(i))));
+        }
+
+        mode.Changed += Refill;
+        Refill();
+
+        HBoxContainer rangeBox = new();
+        rangeBox.AddThemeConstantOverride("separation", 6);
+        rangeBox.AddChild(new Label { Text = "from" });
+        rangeBox.AddChild(min);
+        rangeBox.AddChild(new Label { Text = "to" });
+        rangeBox.AddChild(max);
+
+        HFlowContainer presets = Visuals.Flow(6);
+        presets.AddChild(Visuals.MutedLabel("Quick presets:", 15));
+        (string Label, Func<Cond> Make)[] quickPresets =
+        [
+            ("Path ≥ 3 Elites", () => new MapPathCond(slot.Value, GameData.MapElite, "elites", 3, 10)),
+            ("Path ≥ 4 Elites", () => new MapPathCond(slot.Value, GameData.MapElite, "elites", 4, 10)),
+            ("Path ≥ 3 Rests", () => new MapPathCond(slot.Value, GameData.MapRest, "rests", 3, 10)),
+            ("Path ≥ 4 Rests", () => new MapPathCond(slot.Value, GameData.MapRest, "rests", 4, 10)),
+            ("Path ≥ 2 Shops", () => new MapPathCond(slot.Value, GameData.MapShop, "shops", 2, 10))
+        ];
+        foreach (var qp in quickPresets)
+        {
+            Button b = new() { Text = qp.Label, FocusMode = Control.FocusModeEnum.None };
+            b.AddThemeFontSizeOverride("font_size", 15);
+            b.Pressed += () => Add(qp.Make());
+            presets.AddChild(b);
+        }
+
+        return SimpleTab(
+            "Filter by the maximum number of Elites, Rest Sites, Shops, or Unknowns reachable on a single legal path through the Act (or total across the whole map). Click a room type or preset to add.",
+            [slot.Root, mode.Root, rangeBox],
+            [presets, grid.Root]);
     }
 
     private Control RewardTab()
     {
-        IconGrid grid = new(_hover);
-        grid.SetGroups(CardGroups(_data.FirstRewardCards));
-        Button potion = new() { Text = "Add: drops a potion" };
+        OptionButton neowTiming = new() { FocusMode = Control.FocusModeEnum.None };
+        List<int?> timingRelics = [null];
+        neowTiming.AddItem("Baseline (Neow pick didn't roll rewards)");
+        foreach (int r in _data.NeowRelics)
+        {
+            if (GameData.NeowGiveOf(_data.Relics[r]) is { Kind: "arcane_scroll" or "hefty_tablet" or "lead_paperweight" or "lost_coffer" or "scroll_boxes" or "small_capsule" or "large_capsule" or "kaleidoscope" or "neows_bones" })
+            {
+                timingRelics.Add(r);
+                neowTiming.AddItem($"After taking {_data.RelicName(r)}");
+            }
+        }
+
+        IconGrid grid = new(_hover, onClick: c =>
+        {
+            int? after = timingRelics[Math.Clamp(neowTiming.Selected, 0, timingRelics.Count - 1)];
+            Add(new RewardCardCond(c, after));
+        });
+
+        void Refill()
+        {
+            int? after = timingRelics[Math.Clamp(neowTiming.Selected, 0, timingRelics.Count - 1)];
+            grid.SetGroups(CardGroups(after.HasValue ? _data.RewardCards : _data.FirstRewardCards));
+        }
+
+        neowTiming.ItemSelected += _ => Refill();
+        Refill();
+
+        Button potion = new() { Text = "+ Drops a potion", FocusMode = Control.FocusModeEnum.None };
         potion.Pressed += () => Add(new RewardPotionCond(true));
-        Button noPotion = new() { Text = "Add: drops no potion" };
+        Button noPotion = new() { Text = "+ Drops no potion", FocusMode = Control.FocusModeEnum.None };
         noPotion.Pressed += () => Add(new RewardPotionCond(false));
-        (Control tab, Action refresh) = Tab("The reward of the first fight, with the cards it can roll this early. Holds if the first room is a normal fight and your Neow pick gave no cards, relics or potions.",
-            [potion, noPotion], [grid.Root], [],
-            () => grid.Selected is { } c ? new RewardCardCond(c) : null);
-        grid.Changed += refresh;
-        return tab;
+
+        return SimpleTab(
+            "Click any Card below to require it in the Floor 1 combat reward. You can require it either on the baseline reward stream or specifically after taking a reward-rolling Neow relic!",
+            [new Label { Text = "When:" }, neowTiming, potion, noPotion],
+            [grid.Root]);
     }
 
-    // Every search that was run, most recent first, below the ones the player chose to keep.
     private Control SavedTab()
     {
         VBoxContainer tab = new() { Visible = false };
@@ -425,7 +807,7 @@ public sealed class FilterPanel
         {
             Visuals.Clear(rows);
             if (SavedData.Searches.Count == 0)
-                rows.AddChild(Visuals.MutedLabel("Nothing yet. Run a search, or press Save search above."));
+                rows.AddChild(Visuals.MutedLabel("Nothing yet. Run a search, or press Save above."));
             foreach (SavedSearch search in SavedData.Searches.OrderByDescending(s => s.Kept))
                 rows.AddChild(SavedRow(search));
         }
@@ -443,7 +825,6 @@ public sealed class FilterPanel
         row.AddThemeConstantOverride("separation", 8);
         panel.AddChild(row);
 
-        // Wrapping labels need a width to start from, or they grow tall instead of wide.
         VBoxContainer text = new() { SizeFlagsHorizontal = Control.SizeFlags.ExpandFill, CustomMinimumSize = new Vector2(360, 0) };
         text.AddChild(Visuals.MutedLabel($"{search.Setup}  ·  {search.Used.ToLocalTime():g}", 14));
         Label filters = new() { Text = string.Join("\n", CondCodec.Texts(search.CondsJson)), AutowrapMode = TextServer.AutowrapMode.WordSmart };
@@ -467,16 +848,14 @@ public sealed class FilterPanel
         return panel;
     }
 
-    // A hint, a row of options, the grids, and a bottom row that spells out the filter the picks
-    // make and ends in the Add button. The returned action is to be called when a pick changes.
-    private (Control Tab, Action Refresh) Tab(string hint, Control[] options, Control[] body, Control[] trailing, Func<Cond?> make)
+    private static Control SimpleTab(string hint, Control[] options, Control[] body)
     {
-        VBoxContainer tab = new() { Visible = false };
+        VBoxContainer tab = new() { Visible = false, SizeFlagsVertical = Control.SizeFlags.ExpandFill };
         tab.AddThemeConstantOverride("separation", 8);
-        tab.AddChild(Visuals.MutedLabel(hint));
+        tab.AddChild(Visuals.MutedLabel(hint, 15));
         if (options.Length > 0)
         {
-            HFlowContainer row = Visuals.Flow(16);
+            HFlowContainer row = Visuals.Flow(12);
             foreach (Control option in options)
                 row.AddChild(option);
             tab.AddChild(row);
@@ -484,27 +863,7 @@ public sealed class FilterPanel
 
         foreach (Control part in body)
             tab.AddChild(part);
-
-        HBoxContainer bottom = new();
-        bottom.AddThemeConstantOverride("separation", 8);
-        Label pending = new() { SizeFlagsHorizontal = Control.SizeFlags.ExpandFill, HorizontalAlignment = HorizontalAlignment.Right, ClipText = true };
-        bottom.AddChild(pending);
-        foreach (Control control in trailing)
-            bottom.AddChild(control);
-        Button add = new() { Text = "Add filter", CustomMinimumSize = new Vector2(150, 42) };
-        add.Pressed += () => Add(make());
-        bottom.AddChild(add);
-        tab.AddChild(bottom);
-
-        void Refresh()
-        {
-            Cond? cond = make();
-            add.Disabled = cond == null;
-            pending.Text = cond?.Describe(_data) ?? "";
-        }
-
-        Refresh();
-        return (tab, Refresh);
+        return tab;
     }
 
     private Choice SlotChoice() => new(Enumerable.Range(0, _data.SlotActs.Length).Select(s => (s, $"Act {s + 1}")));
@@ -512,8 +871,6 @@ public sealed class FilterPanel
     private IEnumerable<int> SlotItems(int slot, Func<ActInfo, IEnumerable<int>> pick) =>
         _data.SlotActs[slot].SelectMany(a => pick(_data.ActInfos[a])).Distinct();
 
-    // One group per rarity, by name within it; cards of other characters (Kaleidoscope) are split
-    // by character first. The offset tells cards apart in a grid of mixed things.
     private IEnumerable<(string Heading, IEnumerable<(int Id, Visual Visual)> Items)> CardGroups(IEnumerable<int> cards, int offset = 0) =>
         cards.GroupBy(_data.CardOwner)
             .SelectMany(owner => owner
@@ -522,13 +879,14 @@ public sealed class FilterPanel
                 .Select(g => (owner.Key == null ? $"{g.Key} cards" : $"{owner.Key}  ·  {g.Key}",
                     g.OrderBy(_data.CardName, StringComparer.CurrentCultureIgnoreCase).Select(c => (offset + c, Visuals.Card(_data, c))))));
 
-    // A scrolling grid of tiles of which one can be picked, with a box that narrows long lists.
-    // The tiles can come in groups, each under a heading.
+    // A scrolling grid of tiles. When onClick is provided, clicking a tile triggers onClick(id)
+    // immediately (1-click add). Otherwise, tiles act as a radio selection group.
     private sealed class IconGrid
     {
         private readonly Action<Visual> _hover;
         private readonly bool _optional;
-        private readonly LineEdit _search = new() { PlaceholderText = "Search by name", ClearButtonEnabled = true };
+        private readonly Action<int>? _onClick;
+        private readonly LineEdit _search = new() { PlaceholderText = "Search by name...", ClearButtonEnabled = true };
         private readonly VBoxContainer _groups = new() { SizeFlagsHorizontal = Control.SizeFlags.ExpandFill };
         private readonly List<(Label? Heading, List<(Button Tile, string Name)> Tiles)> _shown = [];
         private ButtonGroup _group = new();
@@ -539,10 +897,11 @@ public sealed class FilterPanel
 
         public event Action? Changed;
 
-        public IconGrid(Action<Visual> hover, bool optional = false)
+        public IconGrid(Action<Visual> hover, bool optional = false, Action<int>? onClick = null)
         {
             _hover = hover;
             _optional = optional;
+            _onClick = onClick;
             _search.TextChanged += _ => Narrow();
             Root.AddChild(_search);
             ScrollContainer scroll = new() { SizeFlagsVertical = Control.SizeFlags.ExpandFill, HorizontalScrollMode = ScrollContainer.ScrollMode.Disabled };
@@ -569,13 +928,21 @@ public sealed class FilterPanel
                 foreach ((int id, Visual visual) in items.Where(item => seen.Add(item.Id)))
                 {
                     Button tile = Visuals.Tile(visual, _hover);
-                    tile.ToggleMode = true;
-                    tile.ButtonGroup = _group;
-                    tile.Toggled += on =>
+                    if (_onClick != null)
                     {
-                        Selected = on ? id : Selected == id ? null : Selected;
-                        Changed?.Invoke();
-                    };
+                        tile.Pressed += () => _onClick(id);
+                    }
+                    else
+                    {
+                        tile.ToggleMode = true;
+                        tile.ButtonGroup = _group;
+                        tile.Toggled += on =>
+                        {
+                            Selected = on ? id : Selected == id ? null : Selected;
+                            Changed?.Invoke();
+                        };
+                    }
+
                     flow.AddChild(tile);
                     tiles.Add((tile, visual.Name));
                 }
@@ -593,8 +960,7 @@ public sealed class FilterPanel
                 _shown.Add((label, tiles));
             }
 
-            // Short lists do not need narrowing.
-            _search.Visible = _shown.Sum(g => g.Tiles.Count) > 14;
+            _search.Visible = _shown.Sum(g => g.Tiles.Count) > 12;
             Narrow();
             if (hadSelection)
                 Changed?.Invoke();

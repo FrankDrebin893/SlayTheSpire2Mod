@@ -2,10 +2,12 @@
 //! search, which only computes the stages its conditions need, cheapest first.
 
 use crate::data::Snapshot;
-use crate::gen::{self, Outcome, RelicDeque, UpFront};
+use crate::gen::{self, Outcome, RelicDeque, Reward, ShopOut, UpFront};
 use crate::map::{self, MapOut};
 use crate::rng::hash;
 use serde::{Deserialize, Serialize};
+
+pub const TREASURE_RELIC_COUNT: usize = 6;
 
 #[derive(Serialize)]
 pub struct DequeOut {
@@ -19,6 +21,10 @@ pub struct MapJson {
     pub points: Vec<[i32; 3]>,
     /// [col, row, col, row]
     pub edges: Vec<[i32; 4]>,
+    pub max_path_elites: i32,
+    pub max_path_rests: i32,
+    pub max_path_shops: i32,
+    pub max_path_unknowns: i32,
 }
 
 #[derive(Serialize)]
@@ -28,11 +34,14 @@ pub struct SimOut {
     pub bosses: Vec<i32>,
     pub second_boss: i32,
     pub ancients: Vec<i32>,
+    pub ancient_relics: Vec<Vec<u32>>,
     pub events: Vec<Vec<u32>>,
     pub normals: Vec<Vec<u32>>,
     pub elites: Vec<Vec<u32>>,
     pub shared_relics: Vec<DequeOut>,
     pub player_relics: Vec<DequeOut>,
+    pub treasure_relics: Vec<u32>,
+    pub first_shop: ShopOut,
     pub neow: Vec<u32>,
     /// What each offer in `neow` gives when taken.
     pub neow_outcomes: Vec<OutcomeOut>,
@@ -49,6 +58,9 @@ pub struct OutcomeOut {
     pub potions: Vec<u32>,
     /// One per entry of `relics` for Neow's Bones, otherwise empty.
     pub nested: Vec<NestedOut>,
+    pub first_gold: i32,
+    pub first_potion: i32,
+    pub first_cards: Vec<u32>,
 }
 
 /// What a relic given by Neow's Bones gives when it is taken first and when it is taken second.
@@ -77,6 +89,10 @@ fn map_json(m: MapOut) -> MapJson {
     MapJson {
         points: m.points.iter().map(|&(c, r, t)| [c, r, t as i32]).collect(),
         edges: m.edges.iter().map(|&(a, b, c, d)| [a, b, c, d]).collect(),
+        max_path_elites: m.max_path_elites,
+        max_path_rests: m.max_path_rests,
+        max_path_shops: m.max_path_shops,
+        max_path_unknowns: m.max_path_unknowns,
     }
 }
 
@@ -98,11 +114,33 @@ pub fn simulate(snap: &Snapshot, seed_text: &str) -> SimOut {
     let neow_outcomes = neow
         .iter()
         .map(|&relic| {
-            let Outcome { cards, relics, potions, nested } = gen::neow_outcome(snap, seed, relic);
+            let Outcome { cards, relics, potions, nested, first_reward } = gen::neow_outcome(snap, seed, relic, first_encounter);
             let nested = nested.into_iter().map(|n| NestedOut { first: given(n.first), second: given(n.second) }).collect();
-            OutcomeOut { cards, relics, potions, nested }
+            OutcomeOut {
+                cards,
+                relics,
+                potions,
+                nested,
+                first_gold: first_reward.gold,
+                first_potion: first_reward.potion,
+                first_cards: first_reward.cards,
+            }
         })
         .collect();
+    let ancient_relics = up
+        .ancients
+        .iter()
+        .enumerate()
+        .map(|(slot, &anc)| {
+            if slot == 0 {
+                neow.clone()
+            } else {
+                gen::ancient_offers(snap, seed, slot, anc)
+            }
+        })
+        .collect();
+    let treasure_relics = gen::treasure_relics(snap, seed, &up.shared_relics, TREASURE_RELIC_COUNT);
+    let first_shop = gen::first_shop(snap, seed, &up.player_relics);
     let maps = acts
         .iter()
         .enumerate()
@@ -115,11 +153,14 @@ pub fn simulate(snap: &Snapshot, seed_text: &str) -> SimOut {
         bosses: up.bosses,
         second_boss: up.second_boss,
         ancients: up.ancients,
+        ancient_relics,
         events: up.events,
         normals: up.normals,
         elites: up.elites,
         shared_relics: deques(up.shared_relics),
         player_relics: deques(up.player_relics),
+        treasure_relics,
+        first_shop,
         neow,
         neow_outcomes,
         gold: reward.gold,
@@ -129,7 +170,7 @@ pub fn simulate(snap: &Snapshot, seed_text: &str) -> SimOut {
     }
 }
 
-#[derive(Deserialize, Clone, Copy)]
+#[derive(Deserialize, Clone, Copy, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum Item {
     Card,
@@ -154,23 +195,61 @@ pub enum Cond {
     Boss { slot: usize, enc: i32 },
     SecondBoss { enc: i32 },
     Ancient { slot: usize, ancient: i32 },
+    /// The Ancient in act `slot` offers `relic`.
+    AncientRelic { slot: usize, relic: u32 },
     /// The event is among the first `within` events queued for the act.
     Event { slot: usize, event: u32, within: usize },
     Elite { slot: usize, enc: u32, within: usize },
     Normal { slot: usize, enc: u32, within: usize },
     /// The relic is among the first `within` of its rarity in the shared or the player bag.
     Relic { shared: bool, relic: u32, within: usize },
+    /// The relic is among the first `within` Treasure Chest relics rolled from the shared bag.
+    TreasureRelic { relic: u32, within: usize },
+    /// The First Shop sells `item` (Card, Relic, or Potion).
+    ShopItem { what: Item, item: u32 },
     MapCount { slot: usize, point_type: u8, min: i32, max: i32 },
-    RewardCard { card: u32 },
+    /// Maximum count of `point_type` reachable on a single legal path in act `slot`.
+    MapPathCount { slot: usize, point_type: u8, min: i32, max: i32 },
+    RewardCard {
+        card: u32,
+        #[serde(default)]
+        after_neow: Option<u32>,
+    },
     RewardPotion { present: bool },
+    /// Holds if ANY of the child conditions in `conds` holds.
+    AnyOf { conds: Vec<Cond> },
+}
+
+impl Cond {
+    /// Cost stage (0 = cheapest, 5 = most expensive) so conditions are evaluated cheapest-first.
+    fn stage(&self) -> u8 {
+        match self {
+            Cond::NeowOffer { .. }
+            | Cond::NeowCurse { .. }
+            | Cond::NeowGives { .. }
+            | Cond::NeowNested { .. }
+            | Cond::RewardCard { after_neow: Some(_), .. } => 0,
+            Cond::Act { .. } => 1,
+            Cond::RewardCard { after_neow: None, .. } | Cond::RewardPotion { .. } => 2,
+            Cond::Boss { .. }
+            | Cond::SecondBoss { .. }
+            | Cond::Ancient { .. }
+            | Cond::AncientRelic { .. }
+            | Cond::Event { .. }
+            | Cond::Elite { .. }
+            | Cond::Normal { .. }
+            | Cond::Relic { .. }
+            | Cond::TreasureRelic { .. } => 3,
+            Cond::ShopItem { .. } => 4,
+            Cond::MapCount { .. } | Cond::MapPathCount { .. } => 5,
+            Cond::AnyOf { conds } => conds.iter().map(|c| c.stage()).max().unwrap_or(0),
+        }
+    }
 }
 
 pub struct Filter {
-    neow: Vec<Cond>,
-    acts: Vec<Cond>,
-    reward: Vec<Cond>,
-    up_front: Vec<Cond>,
-    maps: Vec<Cond>,
+    conds: Vec<Cond>,
+    nested_relics: Vec<u32>,
 }
 
 fn has(outcome: &Outcome, what: Item, item: u32) -> bool {
@@ -185,96 +264,207 @@ fn within(list: Option<&Vec<u32>>, item: u32, n: usize) -> bool {
     list.is_some_and(|l| l.iter().take(n).any(|&x| x == item))
 }
 
+struct EvalCtx<'a> {
+    snap: &'a Snapshot,
+    seed: u64,
+    neow_offers: Option<Vec<u32>>,
+    neow_outcomes: Vec<(u32, Outcome)>,
+    acts: Option<Vec<u32>>,
+    reward: Option<Reward>,
+    up: Option<UpFront>,
+    ancient_relics: [Option<Vec<u32>>; 3],
+    treasure: Option<Vec<u32>>,
+    shop: Option<ShopOut>,
+    maps: [Option<Option<MapOut>>; 3],
+}
+
+impl<'a> EvalCtx<'a> {
+    fn new(snap: &'a Snapshot, seed: u64) -> Self {
+        EvalCtx {
+            snap,
+            seed,
+            neow_offers: None,
+            neow_outcomes: Vec::new(),
+            acts: None,
+            reward: None,
+            up: None,
+            ancient_relics: [None, None, None],
+            treasure: None,
+            shop: None,
+            maps: [None, None, None],
+        }
+    }
+
+    fn offers(&mut self) -> &[u32] {
+        let snap = self.snap;
+        let seed = self.seed;
+        self.neow_offers.get_or_insert_with(|| gen::neow_offers(snap, seed))
+    }
+
+    fn outcome(&mut self, relic: u32) -> &Outcome {
+        if let Some(pos) = self.neow_outcomes.iter().position(|(r, _)| *r == relic) {
+            return &self.neow_outcomes[pos].1;
+        }
+        let out = gen::neow_outcome(self.snap, self.seed, relic, None);
+        self.neow_outcomes.push((relic, out));
+        &self.neow_outcomes.last().unwrap().1
+    }
+
+    fn acts(&mut self) -> &[u32] {
+        let snap = self.snap;
+        let seed = self.seed;
+        self.acts.get_or_insert_with(|| gen::roll_acts(snap, seed))
+    }
+
+    fn reward(&mut self) -> &Reward {
+        let snap = self.snap;
+        let seed = self.seed;
+        self.reward.get_or_insert_with(|| gen::first_reward(snap, seed, None))
+    }
+
+    fn up(&mut self) -> &UpFront {
+        if self.up.is_none() {
+            let acts = self.acts().to_vec();
+            self.up = Some(gen::up_front(self.snap, self.seed, &acts));
+        }
+        self.up.as_ref().unwrap()
+    }
+
+    fn ancient_offers_for(&mut self, slot: usize) -> &[u32] {
+        if slot >= 3 {
+            return &[];
+        }
+        if self.ancient_relics[slot].is_none() {
+            let anc = self.up().ancients.get(slot).copied().unwrap_or(gen::NONE);
+            let offers = if slot == 0 {
+                self.offers().to_vec()
+            } else {
+                gen::ancient_offers(self.snap, self.seed, slot, anc)
+            };
+            self.ancient_relics[slot] = Some(offers);
+        }
+        self.ancient_relics[slot].as_ref().unwrap()
+    }
+
+    fn treasure_relics(&mut self) -> &[u32] {
+        if self.treasure.is_none() {
+            let shared = self.up().shared_relics.clone();
+            self.treasure = Some(gen::treasure_relics(self.snap, self.seed, &shared, TREASURE_RELIC_COUNT));
+        }
+        self.treasure.as_ref().unwrap()
+    }
+
+    fn shop(&mut self) -> &ShopOut {
+        if self.shop.is_none() {
+            let player_bag = self.up().player_relics.clone();
+            self.shop = Some(gen::first_shop(self.snap, self.seed, &player_bag));
+        }
+        self.shop.as_ref().unwrap()
+    }
+
+    fn map(&mut self, slot: usize) -> Option<&MapOut> {
+        if slot >= 3 {
+            return None;
+        }
+        if self.maps[slot].is_none() {
+            let act = *self.acts().get(slot)?;
+            let m = map::generate(self.snap, self.seed, slot, &self.snap.acts[act as usize]);
+            self.maps[slot] = Some(m);
+        }
+        self.maps[slot].as_ref().unwrap().as_ref()
+    }
+
+    fn eval(&mut self, c: &Cond) -> bool {
+        match *c {
+            Cond::NeowOffer { relic } => self.offers().contains(&relic),
+            Cond::NeowCurse { relic } => self.offers().last() == Some(&relic),
+            Cond::NeowGives { relic, what, item } => {
+                self.offers().contains(&relic) && has(self.outcome(relic), what, item)
+            }
+            Cond::NeowNested { relic, via, what, item } => {
+                if !self.offers().contains(&relic) {
+                    return false;
+                }
+                let o = self.outcome(relic);
+                o.relics.iter().position(|&g| g == via).is_some_and(|i| {
+                    let n = &o.nested[i];
+                    has(&n.first, what, item) || has(&n.second, what, item)
+                })
+            }
+            Cond::Act { slot, act } => self.acts().get(slot) == Some(&act),
+            Cond::RewardCard { card, after_neow } => match after_neow {
+                None => self.reward().cards.contains(&card),
+                Some(relic) => {
+                    self.offers().contains(&relic) && self.outcome(relic).first_reward.cards.contains(&card)
+                }
+            },
+            Cond::RewardPotion { present } => (self.reward().potion != gen::NONE) == present,
+            Cond::Boss { slot, enc } => self.up().bosses.get(slot) == Some(&enc),
+            Cond::SecondBoss { enc } => self.up().second_boss == enc,
+            Cond::Ancient { slot, ancient } => self.up().ancients.get(slot) == Some(&ancient),
+            Cond::AncientRelic { slot, relic } => self.ancient_offers_for(slot).contains(&relic),
+            Cond::Event { slot, event, within: n } => within(self.up().events.get(slot), event, n),
+            Cond::Elite { slot, enc, within: n } => within(self.up().elites.get(slot), enc, n),
+            Cond::Normal { slot, enc, within: n } => within(self.up().normals.get(slot), enc, n),
+            Cond::Relic { shared, relic, within: n } => {
+                let bag = if shared { &self.up().shared_relics } else { &self.up().player_relics };
+                bag.iter().any(|d| d.relics.iter().take(n).any(|&r| r == relic))
+            }
+            Cond::TreasureRelic { relic, within: n } => {
+                self.treasure_relics().iter().take(n).any(|&r| r == relic)
+            }
+            Cond::ShopItem { what, item } => {
+                let s = self.shop();
+                match what {
+                    Item::Card => s.cards.contains(&item) || s.colorless.contains(&item),
+                    Item::Relic => s.relics.contains(&item),
+                    Item::Potion => s.potions.contains(&item),
+                }
+            }
+            Cond::MapCount { slot, point_type, min, max } => {
+                let Some(m) = self.map(slot) else { return false };
+                let n = m.count(point_type);
+                n >= min && n <= max
+            }
+            Cond::MapPathCount { slot, point_type, min, max } => {
+                let Some(m) = self.map(slot) else { return false };
+                let n = m.max_on_path(point_type);
+                n >= min && n <= max
+            }
+            Cond::AnyOf { ref conds } => conds.iter().any(|sub| self.eval(sub)),
+        }
+    }
+}
+
 impl Filter {
-    pub fn new(conds: Vec<Cond>) -> Self {
-        let mut f = Filter { neow: vec![], acts: vec![], reward: vec![], up_front: vec![], maps: vec![] };
-        for c in conds {
-            match c {
-                Cond::NeowOffer { .. } | Cond::NeowCurse { .. } | Cond::NeowGives { .. } | Cond::NeowNested { .. } => f.neow.push(c),
-                Cond::Act { .. } => f.acts.push(c),
-                Cond::RewardCard { .. } | Cond::RewardPotion { .. } => f.reward.push(c),
-                Cond::MapCount { .. } => f.maps.push(c),
-                _ => f.up_front.push(c),
+    pub fn new(mut conds: Vec<Cond>) -> Self {
+        conds.sort_by_key(|c| c.stage());
+        let mut nested_relics = Vec::new();
+        for c in &conds {
+            if let Cond::NeowNested { relic, .. } = *c {
+                if !nested_relics.contains(&relic) {
+                    nested_relics.push(relic);
+                }
             }
         }
-        f
+        Filter { conds, nested_relics }
     }
 
     pub fn is_empty(&self) -> bool {
-        self.neow.is_empty() && self.acts.is_empty() && self.reward.is_empty() && self.up_front.is_empty() && self.maps.is_empty()
+        self.conds.is_empty()
     }
 
     pub fn matches(&self, snap: &Snapshot, seed: u64) -> bool {
-        // Neow first: when Neow is unlocked it is always the act 1 ancient, and it is the cheapest roll.
-        if !self.neow.is_empty() {
-            let offers = gen::neow_offers(snap, seed);
-            let ok = self.neow.iter().all(|c| match *c {
-                Cond::NeowOffer { relic } => offers.contains(&relic),
-                Cond::NeowCurse { relic } => offers.last() == Some(&relic),
-                Cond::NeowGives { relic, what, item } => offers.contains(&relic) && has(&gen::neow_outcome(snap, seed, relic), what, item),
-                Cond::NeowNested { relic, .. } => offers.contains(&relic),
-                _ => true,
-            });
-            if !ok || !self.nested_match(snap, seed) {
+        let mut ctx = EvalCtx::new(snap, seed);
+        for c in &self.conds {
+            if !ctx.eval(c) {
                 return false;
             }
         }
-
-        let acts = gen::roll_acts(snap, seed);
-        for c in &self.acts {
-            if let Cond::Act { slot, act } = *c {
-                if acts.get(slot) != Some(&act) {
-                    return false;
-                }
-            }
-        }
-
-        if !self.reward.is_empty() {
-            let reward = gen::first_reward(snap, seed, None);
-            let ok = self.reward.iter().all(|c| match *c {
-                Cond::RewardCard { card } => reward.cards.contains(&card),
-                Cond::RewardPotion { present } => (reward.potion != gen::NONE) == present,
-                _ => true,
-            });
-            if !ok {
-                return false;
-            }
-        }
-
-        if !self.up_front.is_empty() && !self.up_front_matches(&gen::up_front(snap, seed, &acts)) {
-            return false;
-        }
-
-        if !self.maps.is_empty() {
-            let mut cache: Vec<Option<Option<MapOut>>> = (0..acts.len()).map(|_| None).collect();
-            for c in &self.maps {
-                let Cond::MapCount { slot, point_type, min, max } = *c else { continue };
-                let Some(&act) = acts.get(slot) else { return false };
-                let map = cache[slot].get_or_insert_with(|| map::generate(snap, seed, slot, &snap.acts[act as usize]));
-                let Some(map) = map else { return false };
-                let n = map.count(point_type);
-                if n < min || n > max {
-                    return false;
-                }
-            }
-        }
-
-        true
-    }
-
-    /// The NeowNested conditions, per relic they are about: one order of taking what that relic
-    /// gives must satisfy them all.
-    fn nested_match(&self, snap: &Snapshot, seed: u64) -> bool {
-        let mut done: Vec<u32> = Vec::new();
-        for c in &self.neow {
-            let Cond::NeowNested { relic, .. } = *c else { continue };
-            if done.contains(&relic) {
-                continue;
-            }
-            done.push(relic);
-            let outcome = gen::neow_outcome(snap, seed, relic);
+        for &relic in &self.nested_relics {
+            let outcome = ctx.outcome(relic).clone();
             let holds = |taken_first: usize| {
-                self.neow.iter().all(|c| match *c {
+                self.conds.iter().all(|c| match *c {
                     Cond::NeowNested { relic: r, via, what, item } if r == relic => {
                         outcome.relics.iter().position(|&g| g == via).is_some_and(|i| {
                             let nested = &outcome.nested[i];
@@ -289,21 +479,5 @@ impl Filter {
             }
         }
         true
-    }
-
-    fn up_front_matches(&self, up: &UpFront) -> bool {
-        self.up_front.iter().all(|c| match *c {
-            Cond::Boss { slot, enc } => up.bosses.get(slot) == Some(&enc),
-            Cond::SecondBoss { enc } => up.second_boss == enc,
-            Cond::Ancient { slot, ancient } => up.ancients.get(slot) == Some(&ancient),
-            Cond::Event { slot, event, within: n } => within(up.events.get(slot), event, n),
-            Cond::Elite { slot, enc, within: n } => within(up.elites.get(slot), enc, n),
-            Cond::Normal { slot, enc, within: n } => within(up.normals.get(slot), enc, n),
-            Cond::Relic { shared, relic, within: n } => {
-                let bag = if shared { &up.shared_relics } else { &up.player_relics };
-                bag.iter().any(|d| d.relics.iter().take(n).any(|&r| r == relic))
-            }
-            _ => true,
-        })
     }
 }
